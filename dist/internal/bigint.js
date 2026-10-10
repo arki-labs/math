@@ -6,7 +6,11 @@ export function sign(n) {
     return n < 0n ? -1 : n > 0n ? 1 : 0;
 }
 const POW10 = [1n];
+/** Powers up to this exponent are memoized (≈130 KB total); larger ones are computed on demand. */
+const POW10_CACHE_LIMIT = 512;
 export function pow10(exponent) {
+    if (exponent > POW10_CACHE_LIMIT)
+        return 10n ** BigInt(exponent);
     for (let i = POW10.length; i <= exponent; i++)
         POW10.push(POW10[i - 1] * 10n);
     return POW10[exponent];

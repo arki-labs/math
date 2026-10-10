@@ -20,10 +20,27 @@ export function thousandsGroups(n) {
         return [0];
     const groups = [];
     while (n > 0n) {
-        groups.unshift(Number(n % 1000n));
+        groups.push(Number(n % 1000n));
         n /= 1000n;
     }
-    return groups;
+    return groups.toReversed();
+}
+/** Rejects an integer too long for the locale before any grouping work is done. */
+function assertFits(n, locale) {
+    const limit = locale.maxGroups * 3;
+    // Comparing against 10^limit is O(1) for a big input (the limit is tiny); no digit string is built.
+    if (n >= 10n ** BigInt(limit)) {
+        throw new NumericRangeError(`The number has more than ${limit} digits, beyond what the ${locale.code} words can spell`);
+    }
+}
+/** The number as digits, exactly: every fraction digit is kept (Intl allows at most 100). */
+function digitsOf(d, locale) {
+    const fractionDigits = Math.min(d.scale, 100);
+    return formatNumber(d, {
+        locale: locale.code,
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: fractionDigits,
+    });
 }
 function toInteger(value, name) {
     if (typeof value === 'bigint')
@@ -45,10 +62,11 @@ export function spellNumber(value, options = {}) {
     const d = Decimal.from(value).trim();
     const magnitude = d.abs();
     if (options.until !== undefined && magnitude.gt(options.until))
-        return formatNumber(d, { locale: locale.code });
+        return digitsOf(d, locale);
     if (options.after !== undefined && magnitude.lte(options.after))
-        return formatNumber(d, { locale: locale.code });
+        return digitsOf(d, locale);
     const integer = magnitude.toScale(0, 'down').toBigInt();
+    assertFits(integer, locale);
     const words = [locale.spell(integer, context)];
     if (magnitude.scale > 0) {
         const text = magnitude.toString();
@@ -64,7 +82,9 @@ export function spellOrdinal(value, options = {}) {
     const n = toInteger(value, 'value');
     if (n < 1n)
         throw new InvalidArgumentError(`Ordinals start at 1, got ${n}`);
-    return (options.locale ?? en).spellOrdinal(n, { gender: options.gender });
+    const locale = options.locale ?? en;
+    assertFits(n, locale);
+    return locale.spellOrdinal(n, { gender: options.gender });
 }
 /** `formatOrdinal(21)` → `'21st'`; `formatOrdinal(1000)` → `'1,000th'`. Positive integers only. */
 export function formatOrdinal(value, options = {}) {
@@ -189,6 +209,7 @@ export const en = {
     code: 'en-US',
     negative: 'minus',
     decimalSeparator: 'point',
+    maxGroups: 12,
     spell: n => enSpell(n, false),
     spellOrdinal: n => enSpellOrdinal(n, false),
     ordinal: (n, digits) => enOrdinal(n, digits),
@@ -198,6 +219,7 @@ export const enGB = {
     code: 'en-GB',
     negative: 'minus',
     decimalSeparator: 'point',
+    maxGroups: 12,
     spell: n => enSpell(n, true),
     spellOrdinal: n => enSpellOrdinal(n, true),
     ordinal: (n, digits) => enOrdinal(n, digits),

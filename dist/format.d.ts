@@ -41,7 +41,11 @@ export declare function formatNumber(value: FormatValue, options?: FormatOptions
  * unless overridden: `formatCurrency(1234.5, 'EUR', { locale: 'de-DE' })` → `'1.234,50 €'`.
  */
 export declare function formatCurrency(value: FormatValue, currency: string, options?: CurrencyOptions): string;
-/** Formats a FRACTION as a percent: `formatPercent(0.125)` → `'12.5%'`. Default 0–2 fraction digits. */
+/**
+ * Formats a FRACTION as a percent. The input is a fraction, NOT a percentage:
+ * `formatPercent(0.125)` → `'12.5%'`, while `formatPercent(12.5)` → `'1,250%'`.
+ * Default 0–2 fraction digits.
+ */
 export declare function formatPercent(fraction: FormatValue, options?: FormatOptions): string;
 /** Short or long compact form: `formatCompact(1230000)` → `'1.2M'`. Default max 1 fraction digit. */
 export declare function formatCompact(value: FormatValue, options?: CompactOptions): string;
@@ -64,8 +68,11 @@ export type Formatter = {
     formatCurrency(value: FormatValue, currency: string, options?: CurrencyOptions): string;
 };
 /**
- * Binds a default locale (and optionally a currency) once. Per-call `locale`
- * overrides the default; an explicit currency overrides the bound one.
+ * Binds a default locale (and optionally a currency) once. The defaults are
+ * copied at creation, so later changes to the caller's object have no effect.
+ * Per-call `locale` overrides the default; an explicit currency overrides the
+ * bound one. Calls without per-call options reuse a pre-resolved
+ * `Intl.NumberFormat` and skip cache-key building.
  * `formatCurrency` with no currency anywhere throws `InvalidArgumentError`.
  */
 export declare function createFormatter(defaults: {

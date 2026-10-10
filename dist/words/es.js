@@ -177,14 +177,23 @@ function belowThousandOrdinal(n) {
     }
     return words;
 }
-/** Ordinal words for 1–999 999: `dos milésimo trigésimo cuarto`. */
+/**
+ * RAE (https://www.rae.es/dpd/ordinales): a multiplied scale ordinal is one
+ * word, `dosmilésimo`, `diezmilésimo`, `dosmillonésimo`, not `dos milésimo`.
+ * The count joins the scale without spaces and loses its written accent
+ * (`veintidós` + `milésimo` → `veintidosmilésimo`).
+ */
+function scaleOrdinal(count, scaleWord) {
+    return `${count.normalize('NFD').replaceAll(/\p{M}/gu, '').replaceAll(' ', '')}${scaleWord}`;
+}
+/** Ordinal words for 1–999 999: `dosmilésimo trigésimo cuarto`. */
 function belowMillionOrdinal(n) {
     const thousands = Math.floor(n / 1000);
     const words = [];
     if (thousands === 1)
         words.push('milésimo');
     else if (thousands > 1)
-        words.push(`${belowThousand(thousands, { feminine: false, apocope: true })} milésimo`);
+        words.push(scaleOrdinal(belowThousand(thousands, { feminine: false, apocope: true }), 'milésimo'));
     return [...words, ...belowThousandOrdinal(n % 1000)];
 }
 function spellOrdinal(n, feminine) {
@@ -194,10 +203,10 @@ function spellOrdinal(n, feminine) {
     const millions = Number((n / 1000000n) % 1000000n);
     const masculineNoun = { feminine: false, apocope: true };
     if (billions > 0) {
-        words.push(billions === 1 ? 'billonésimo' : `${belowThousand(billions, masculineNoun)} billonésimo`);
+        words.push(billions === 1 ? 'billonésimo' : scaleOrdinal(belowThousand(billions, masculineNoun), 'billonésimo'));
     }
     if (millions > 0) {
-        words.push(millions === 1 ? 'millonésimo' : `${belowMillion(millions, masculineNoun, false)} millonésimo`);
+        words.push(millions === 1 ? 'millonésimo' : scaleOrdinal(belowMillion(millions, masculineNoun, false), 'millonésimo'));
     }
     words.push(...belowMillionOrdinal(Number(n % 1000000n)));
     // Only the ordinal words agree in gender; the count words ("dos", "cuatro") stay as they are.
@@ -215,6 +224,7 @@ export const es = {
     code: 'es-ES',
     negative: 'menos',
     decimalSeparator: 'coma',
+    maxGroups: 5,
     spell: (n, context) => spell(n, context.gender === 'feminine'),
     // Neuter agrees as masculine.
     spellOrdinal: (n, context) => spellOrdinal(n, context.gender === 'feminine'),

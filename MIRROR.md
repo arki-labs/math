@@ -1,6 +1,6 @@
 # @arki/math
 
-Published version: **0.0.2**
+Published version: **0.0.3**
 
 This repository is a **read-only mirror** of the [@arki/math](https://www.npmjs.com/package/@arki/math) npm package.
 

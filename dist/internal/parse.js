@@ -1,5 +1,5 @@
 import { NumberFormatError, NumericRangeError } from '../errors.js';
-import { pow10 } from './bigint.js';
+import { digitCount, pow10 } from './bigint.js';
 import { assertDigitLimit, assertScaleLimit } from './limits.js';
 const DECIMAL_SYNTAX = /^([+-]?)(\d*)(?:\.(\d*))?(?:e([+-]?\d+))?$/i;
 /**
@@ -18,7 +18,9 @@ export function parseDecimalString(input) {
     if (exponentText !== undefined)
         assertScaleLimit(Number(exponentText), 'Exponent');
     const exponent = exponentText === undefined ? 0 : Number(exponentText);
-    assertDigitLimit(integerDigits.length + fractionDigits.length, `"${input.slice(0, 20)}…"`);
+    // A positive exponent beyond the fraction digits pads the coefficient with zeros; count those too.
+    const paddedDigits = Math.max(0, exponent - fractionDigits.length);
+    assertDigitLimit(integerDigits.length + fractionDigits.length + paddedDigits, `"${input.slice(0, 20)}…"`);
     let coefficient = BigInt(integerDigits + fractionDigits || '0');
     if (match[1] === '-')
         coefficient = -coefficient;
@@ -45,6 +47,7 @@ export function partsFromNumber(value) {
     return parseDecimalString(value === 0 ? '0' : String(value));
 }
 export function partsFromBigInt(value) {
+    assertDigitLimit(digitCount(value), 'bigint input');
     return { coefficient: value, scale: 0 };
 }
 //# sourceMappingURL=parse.js.map

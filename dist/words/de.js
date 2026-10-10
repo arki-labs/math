@@ -132,6 +132,7 @@ export const de = {
     code: 'de-DE',
     negative: 'minus',
     decimalSeparator: 'Komma',
+    maxGroups: 5,
     spell: n => spell(n),
     spellOrdinal: (n, context) => spellOrdinal(n, context.gender),
     ordinal: (_n, digits) => `${digits}.`,

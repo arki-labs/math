@@ -15,6 +15,11 @@ export type WordsContext = {
 /**
  * The contract a locale implements. All inputs are non-negative integers;
  * the core handles sign, fractions and thresholds.
+ *
+ * Locales are objects you import (`import { ro } from '@arki/math/words/ro'`),
+ * not Intl-style strings (`'ro'`). A string would need a registry that holds
+ * every language's grammar, so every app would bundle all of them. An imported
+ * object lets the bundler keep only the languages you actually reference.
  */
 export type NumberWordsLocale = {
     /** BCP 47 tag, also used for digit formatting. */
@@ -23,6 +28,12 @@ export type NumberWordsLocale = {
     readonly negative: string;
     /** The word read for the decimal separator: `point`, `virgulă`, `Komma`. */
     readonly decimalSeparator: string;
+    /**
+     * How many base-1000 groups the locale can spell (`en`: 12, up to 10^36 − 1).
+     * The core rejects longer integers with `NumericRangeError` by digit count,
+     * before any grouping work is done.
+     */
+    readonly maxGroups: number;
     /** Cardinal words for `n ≥ 0`. Throws `NumericRangeError` beyond the locale's largest scale word. */
     spell(n: bigint, context: WordsContext): string;
     /** Ordinal words for `n ≥ 1`: `twenty-first`, `al douăzeci și unulea`. */
@@ -33,9 +44,13 @@ export type NumberWordsLocale = {
 export type SpellOptions = {
     locale?: NumberWordsLocale;
     gender?: Gender;
-    /** Spell only numbers up to and including this value; larger ones are returned as formatted digits. */
+    /**
+     * Numbers are spelled when `after < |value| ≤ until`; the rest come back as
+     * formatted digits that keep the exact value (every fraction digit is kept).
+     * `until` is the inclusive upper bound of the spelled range.
+     */
     until?: number;
-    /** Spell only numbers strictly greater than this value; smaller ones are returned as formatted digits. */
+    /** The exclusive lower bound of the spelled range (see `until`). */
     after?: number;
 };
 export type OrdinalOptions = {

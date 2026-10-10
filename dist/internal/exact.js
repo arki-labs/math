@@ -7,7 +7,7 @@
 import { DivisionByZeroError, InvalidArgumentError, NumberFormatError, NumericRangeError, ResourceLimitError, RoundingNecessaryError, } from '../errors.js';
 import { abs, digitCount, divideRounded, floorDiv, gcd, pow10, sign } from './bigint.js';
 import { assertScale, fractionToDecimalParts } from './fraction.js';
-import { MAX_DIGITS, MAX_SCALE } from './limits.js';
+import { assertDigitLimit, MAX_DIGITS, MAX_SCALE } from './limits.js';
 import { parseDecimalString, partsFromBigInt, partsFromNumber } from './parse.js';
 const BRAND = Symbol('arki.math.exact');
 function refuseCoercion(typeName) {
@@ -39,6 +39,7 @@ function toDecimalParts(value) {
 function toBigIntInput(value, what) {
     switch (typeof value) {
         case 'bigint': {
+            assertDigitLimit(digitCount(value), what);
             return value;
         }
         case 'number': {
@@ -85,11 +86,23 @@ export class Decimal {
     static from(value) {
         return value instanceof Decimal ? value : Decimal.fromParts(toDecimalParts(value));
     }
+    /** Exact sum; accumulates one coefficient instead of allocating a Decimal per element. */
     static sum(values) {
-        let total = ZERO;
-        for (const value of values)
-            total = total.plus(value);
-        return total;
+        let coefficient = 0n;
+        let scale = 0;
+        for (const value of values) {
+            const d = Decimal.from(value);
+            if (d.scale > scale) {
+                coefficient *= pow10(d.scale - scale);
+                scale = d.scale;
+            }
+            coefficient += d.scale === scale ? d.coefficient : d.coefficient * pow10(scale - d.scale);
+        }
+        return new Decimal(coefficient, scale, BRAND);
+    }
+    /** Comparator for sorting: `prices.sort(Decimal.compare)`. */
+    static compare(a, b) {
+        return Decimal.from(a).compareTo(b);
     }
     static max(first, ...rest) {
         let best = Decimal.from(first);
@@ -116,7 +129,11 @@ export class Decimal {
     }
     times(other) {
         const that = Decimal.from(other);
-        return new Decimal(this.coefficient * that.coefficient, this.scale + that.scale, BRAND);
+        const scale = this.scale + that.scale;
+        if (scale > MAX_SCALE) {
+            throw new ResourceLimitError(`The product would have ${scale} fraction digits; the limit is ${MAX_SCALE}`);
+        }
+        return new Decimal(this.coefficient * that.coefficient, scale, BRAND);
     }
     /**
      * Exact when the result terminates (`1 ÷ 8 = 0.125`). When it does not
@@ -271,7 +288,6 @@ function align(a, b) {
         return [a.coefficient, b.coefficient * pow10(a.scale - b.scale), a.scale];
     return [a.coefficient * pow10(b.scale - a.scale), b.coefficient, b.scale];
 }
-const ZERO = Decimal.fromParts({ coefficient: 0n, scale: 0 });
 const ONE = Decimal.fromParts({ coefficient: 1n, scale: 0 });
 export function decimal(value) {
     return Decimal.from(value);
@@ -321,16 +337,31 @@ export class Rational {
         return Rational.fromParts(parts.coefficient, pow10(parts.scale));
     }
     // Arithmetic -------------------------------------------------------------
+    /** Knuth's addition: reduce through the denominators' GCD instead of the full product. */
     plus(other) {
         const that = Rational.from(other);
-        return Rational.fromParts(this.numerator * that.denominator + that.numerator * this.denominator, this.denominator * that.denominator);
+        const g = gcd(this.denominator, that.denominator);
+        if (g === 1n) {
+            // Coprime denominators: the sum is already in lowest terms.
+            return new Rational(this.numerator * that.denominator + that.numerator * this.denominator, this.denominator * that.denominator, BRAND);
+        }
+        const numerator = this.numerator * (that.denominator / g) + that.numerator * (this.denominator / g);
+        if (numerator === 0n)
+            return RATIONAL_ZERO;
+        const g2 = gcd(numerator, g);
+        return new Rational(numerator / g2, (this.denominator / g) * (that.denominator / g2), BRAND);
     }
     minus(other) {
         return this.plus(Rational.from(other).negated());
     }
+    /** Cross-cancels before multiplying, so the products never carry common factors. */
     times(other) {
         const that = Rational.from(other);
-        return Rational.fromParts(this.numerator * that.numerator, this.denominator * that.denominator);
+        if (this.numerator === 0n || that.numerator === 0n)
+            return RATIONAL_ZERO;
+        const g1 = gcd(this.numerator, that.denominator);
+        const g2 = gcd(that.numerator, this.denominator);
+        return new Rational((this.numerator / g1) * (that.numerator / g2), (this.denominator / g2) * (that.denominator / g1), BRAND);
     }
     dividedBy(other) {
         const that = Rational.from(other);
@@ -438,10 +469,45 @@ export class Rational {
             fraction: Rational.fromParts(this.numerator % this.denominator, this.denominator),
         };
     }
-    /** The nearest double, computed through ~20 significant decimal digits. */
+    /**
+     * The nearest double, ties to even, by rounding in binary (never through a
+     * decimal string, which could round twice). Throws on overflow, or when a
+     * non-zero value would underflow to zero.
+     */
     toNumber() {
-        const scale = Math.min(MAX_SCALE, Math.max(0, 20 + digitCount(this.denominator) - digitCount(this.numerator)));
-        return this.toDecimal({ scale, rounding: 'halfEven' }).toNumber();
+        if (this.numerator === 0n)
+            return 0;
+        const p = abs(this.numerator);
+        const q = this.denominator;
+        // Scale p/q so the integer quotient has 54 bits: 53 for the mantissa plus one to round with.
+        let shift = 54 - (p.toString(2).length - q.toString(2).length);
+        let scaledP;
+        let scaledQ;
+        let quotient;
+        for (;;) {
+            scaledP = shift >= 0 ? p << BigInt(shift) : p;
+            scaledQ = shift >= 0 ? q : q << BigInt(-shift);
+            quotient = scaledP / scaledQ;
+            if (quotient >= 1n << 54n)
+                shift--;
+            else if (quotient < 1n << 53n)
+                shift++;
+            else
+                break;
+        }
+        let mantissa = quotient >> 1n;
+        const roundBit = (quotient & 1n) === 1n;
+        const sticky = scaledP % scaledQ !== 0n;
+        if (roundBit && (sticky || (mantissa & 1n) === 1n))
+            mantissa += 1n;
+        // Scale in two steps so results in the subnormal range are reachable (they may carry one extra rounding).
+        const exponent = 1 - shift;
+        const magnitude = exponent < -1022 ? Number(mantissa) * 2 ** -1022 * 2 ** (exponent + 1022) : Number(mantissa) * 2 ** exponent;
+        if (!Number.isFinite(magnitude))
+            throw new NumericRangeError(`${this.toString()} overflows a JS number`);
+        if (magnitude === 0)
+            throw new NumericRangeError(`${this.toString()} underflows to zero as a JS number`);
+        return this.numerator < 0n ? -magnitude : magnitude;
     }
     /** Requires an integral value. */
     toBigInt() {
@@ -489,6 +555,7 @@ export function ratio(first, second) {
         return Rational.from(first);
     return Rational.fromParts(toBigIntInput(first, 'numerator'), toBigIntInput(second, 'denominator'));
 }
+const RATIONAL_ZERO = Rational.fromParts(0n, 1n);
 export function isRational(value) {
     return value instanceof Rational;
 }

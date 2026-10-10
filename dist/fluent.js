@@ -4,9 +4,15 @@
  * approximate. Hop to the exact types with `.toDecimal()` / `.toRatio()`
  * when a result must be exact. Extract with `.value()`.
  */
+import { DivisionByZeroError, NumericRangeError } from './errors.js';
 import { formatCompact, formatCurrency, formatNumber, formatPercent } from './format.js';
 import { Decimal, Rational } from './internal/exact.js';
 import { approxEqual, assertFinite, clamp, inRange, lerp, remap, round, roundTo } from './number.js';
+function finiteResult(value) {
+    if (!Number.isFinite(value))
+        throw new NumericRangeError('result is too large to represent');
+    return value;
+}
 export class NumberValue {
     #value;
     constructor(value) {
@@ -15,16 +21,22 @@ export class NumberValue {
     }
     // Float arithmetic ---------------------------------------------------------
     plus(other) {
-        return num(this.#value + other);
+        assertFinite(other, 'other');
+        return num(finiteResult(this.#value + other));
     }
     minus(other) {
-        return num(this.#value - other);
+        assertFinite(other, 'other');
+        return num(finiteResult(this.#value - other));
     }
     times(other) {
-        return num(this.#value * other);
+        assertFinite(other, 'other');
+        return num(finiteResult(this.#value * other));
     }
     dividedBy(other) {
-        return num(this.#value / other);
+        assertFinite(other, 'other');
+        if (other === 0)
+            throw new DivisionByZeroError('Division by zero');
+        return num(finiteResult(this.#value / other));
     }
     abs() {
         return num(Math.abs(this.#value));

@@ -5,16 +5,25 @@
  * Inputs may be any iterable but are read once and never modified (no in-place
  * sort). Results never carry `-0`.
  */
-import { EmptyDataError, InvalidArgumentError } from './errors.js';
+import { EmptyDataError, InvalidArgumentError, NumericRangeError } from './errors.js';
 import { assertFinite } from './number.js';
 function noNegativeZero(value) {
     return value === 0 ? 0 : value;
 }
-/** Reads the iterable once into a fresh array and checks every element. */
+/**
+ * Validates every element and returns them as an array. An array input is
+ * returned as-is (never mutated by this module — sorting goes through
+ * `toSorted`), so the common case allocates nothing.
+ */
 function toNumbers(values, name) {
-    const out = [...values];
-    for (const [i, value] of out.entries())
-        assertFinite(value, `${name}[${i}]`);
+    const out = Array.isArray(values) ? values : [...values];
+    let index = 0;
+    for (const value of out) {
+        // Cheap check first; the message is only built for the failing element.
+        if (typeof value !== 'number' || !Number.isFinite(value))
+            assertFinite(value, `${name}[${index}]`);
+        index++;
+    }
     return out;
 }
 function sumOf(values) {
@@ -26,6 +35,36 @@ function sumOf(values) {
         total = next;
     }
     return total + compensation;
+}
+function assertRepresentable(value, what) {
+    if (!Number.isFinite(value))
+        throw new NumericRangeError(`${what} is too large to represent`);
+    return value;
+}
+/**
+ * Mean that cannot overflow: the compensated sum divided by the count, or,
+ * when the sum itself overflows, the sum of the values each divided by the
+ * count (the mean of finite numbers is always finite).
+ */
+function meanOf(values) {
+    const n = values.length;
+    const total = sumOf(values);
+    if (Number.isFinite(total))
+        return total / n;
+    let scaled = 0;
+    let compensation = 0;
+    for (const value of values) {
+        const part = value / n;
+        const next = scaled + part;
+        compensation += Math.abs(scaled) >= Math.abs(part) ? scaled - next + part : part - next + scaled;
+        scaled = next;
+    }
+    return scaled + compensation;
+}
+/** Linear interpolation that stays finite when `high - low` would overflow. */
+function interpolate(low, high, fraction) {
+    const span = high - low;
+    return Number.isFinite(span) ? low + span * fraction : low * (1 - fraction) + high * fraction;
 }
 function sortedCopy(values) {
     return values.toSorted((a, b) => a - b);
@@ -40,10 +79,15 @@ function pairs(x, y) {
         throw new InvalidArgumentError('at least 2 points are required');
     return { xs, ys };
 }
-/** Centered sums of squares and cross-products: `{ sxx, syy, sxy, meanX, meanY }`. */
+/**
+ * Centered sums of squares and cross-products. The sums are in units of `kx`
+ * (for x) and `ky` (for y): the plain path has `kx = ky = 1`; when the plain
+ * sums overflow, the data is rescaled by its largest magnitude, which leaves
+ * correlation unchanged and slope recoverable as `sxy / sxx * ky / kx`.
+ */
 function centeredSums(xs, ys) {
-    const meanX = sumOf(xs) / xs.length;
-    const meanY = sumOf(ys) / ys.length;
+    const meanX = meanOf(xs);
+    const meanY = meanOf(ys);
     let sxx = 0;
     let syy = 0;
     let sxy = 0;
@@ -54,18 +98,33 @@ function centeredSums(xs, ys) {
         syy += dy * dy;
         sxy += dx * dy;
     }
-    return { sxx, syy, sxy, meanX, meanY };
+    if (Number.isFinite(sxx) && Number.isFinite(syy) && Number.isFinite(sxy)) {
+        return { sxx, syy, sxy, meanX, meanY, kx: 1, ky: 1 };
+    }
+    const kx = xs.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
+    const ky = ys.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
+    sxx = 0;
+    syy = 0;
+    sxy = 0;
+    for (const [i, x] of xs.entries()) {
+        const dx = x / kx - meanX / kx;
+        const dy = (ys[i] ?? 0) / ky - meanY / ky;
+        sxx += dx * dx;
+        syy += dy * dy;
+        sxy += dx * dy;
+    }
+    return { sxx, syy, sxy, meanX, meanY, kx, ky };
 }
 /** Total of the values using Neumaier compensated summation. An empty input gives `0`. */
 export function sum(values) {
-    return noNegativeZero(sumOf(toNumbers(values, 'values')));
+    return noNegativeZero(assertRepresentable(sumOf(toNumbers(values, 'values')), 'sum'));
 }
 /** Arithmetic mean (compensated sum divided by the count). Throws `EmptyDataError` when empty. */
 export function mean(values) {
     const data = toNumbers(values, 'values');
     if (data.length === 0)
         throw new EmptyDataError('mean of an empty data set');
-    return noNegativeZero(sumOf(data) / data.length);
+    return noNegativeZero(meanOf(data));
 }
 /** Middle value; for an even count, the average of the two middle values. Throws `EmptyDataError` when empty. */
 export function median(values) {
@@ -95,24 +154,39 @@ export function mode(values) {
 }
 /**
  * The `p`-th percentile, `p` in `[0, 100]`, by linear interpolation between
- * closest ranks (R-7: Excel `PERCENTILE.INC`, NumPy default).
+ * closest ranks (R-7: Excel `PERCENTILE.INC`, NumPy default). Equal to
+ * `quantile(values, p / 100)`.
  * Throws `EmptyDataError` when empty and `InvalidArgumentError` when `p` is out of range.
  */
 export function percentile(values, p) {
     assertFinite(p, 'p');
     if (p < 0 || p > 100)
         throw new InvalidArgumentError(`p must be within [0, 100], got ${p}`);
+    return quantileOf(values, p / 100, 'percentile');
+}
+/**
+ * The `q`-th quantile, `q` in `[0, 1]`, with the same R-7 interpolation as
+ * `percentile`: `quantile(values, 0.9)` equals `percentile(values, 90)`.
+ * Throws `EmptyDataError` when empty and `InvalidArgumentError` when `q` is out of range.
+ */
+export function quantile(values, q) {
+    assertFinite(q, 'q');
+    if (q < 0 || q > 1)
+        throw new InvalidArgumentError(`q must be within [0, 1], got ${q}`);
+    return quantileOf(values, q, 'quantile');
+}
+function quantileOf(values, q, label) {
     const sorted = sortedCopy(toNumbers(values, 'values'));
     const n = sorted.length;
     if (n === 0)
-        throw new EmptyDataError('percentile of an empty data set');
-    const rank = ((n - 1) * p) / 100;
+        throw new EmptyDataError(`${label} of an empty data set`);
+    const rank = (n - 1) * q;
     const lower = Math.floor(rank);
     const fraction = rank - lower;
     const low = sorted[lower];
     if (fraction === 0)
         return noNegativeZero(low);
-    return noNegativeZero(low + fraction * (sorted[lower + 1] - low));
+    return noNegativeZero(interpolate(low, sorted[lower + 1], fraction));
 }
 /**
  * Variance by Welford's one-pass algorithm. Sample (`ddof: 1`, divide by n - 1)
@@ -136,7 +210,7 @@ export function variance(values, options = {}) {
         runningMean += delta / count;
         m2 += delta * (value - runningMean);
     }
-    return noNegativeZero(m2 / (count - ddof));
+    return noNegativeZero(assertRepresentable(m2 / (count - ddof), 'variance'));
 }
 /** Square root of `variance`, with the same `ddof` convention (sample by default). */
 export function stddev(values, options = {}) {
@@ -167,7 +241,7 @@ export function correlation(x, y) {
     const { sxx, syy, sxy } = centeredSums(xs, ys);
     if (sxx === 0 || syy === 0)
         throw new InvalidArgumentError('correlation is undefined when x or y is constant');
-    const r = sxy / (Math.sqrt(sxx) * Math.sqrt(syy));
+    const r = sxy / Math.sqrt(sxx) / Math.sqrt(syy);
     return noNegativeZero(Math.min(1, Math.max(-1, r)));
 }
 /**
@@ -177,10 +251,11 @@ export function correlation(x, y) {
  */
 export function linearRegression(x, y) {
     const { xs, ys } = pairs(x, y);
-    const { sxx, sxy, meanX, meanY } = centeredSums(xs, ys);
+    const { sxx, sxy, meanX, meanY, kx, ky } = centeredSums(xs, ys);
     if (sxx === 0)
         throw new InvalidArgumentError('linear regression is undefined when x is constant');
-    const slope = sxy / sxx;
-    return { slope: noNegativeZero(slope), intercept: noNegativeZero(meanY - slope * meanX) };
+    const slope = assertRepresentable(((sxy / sxx) * ky) / kx, 'slope');
+    const intercept = assertRepresentable(meanY - slope * meanX, 'intercept');
+    return { slope: noNegativeZero(slope), intercept: noNegativeZero(intercept) };
 }
 //# sourceMappingURL=stats.js.map

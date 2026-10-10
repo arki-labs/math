@@ -1,1 +1,1 @@
-{"version":3,"file":"es.d.ts","sourceRoot":"","sources":["../../src/words/es.ts"],"names":[],"mappings":"AAAA;;;;;GAKG;AAEH,OAAO,KAAK,EAAE,iBAAiB,EAAE,MAAM,aAAa,CAAC;AA+MrD,qGAAqG;AACrG,eAAO,MAAM,EAAE,EAAE,iBAQhB,CAAC"}
+{"version":3,"file":"es.d.ts","sourceRoot":"","sources":["../../src/words/es.ts"],"names":[],"mappings":"AAAA;;;;;GAKG;AAEH,OAAO,KAAK,EAAE,iBAAiB,EAAE,MAAM,aAAa,CAAC;AA4NrD,qGAAqG;AACrG,eAAO,MAAM,EAAE,EAAE,iBAShB,CAAC"}

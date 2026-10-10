@@ -16,7 +16,6 @@ const SQRT2 = Math.SQRT2;
 const SQRT_2PI = Math.sqrt(2 * Math.PI);
 const LN_SQRT_PI = 0.5 * Math.log(Math.PI);
 const LN_2PI = Math.log(2 * Math.PI);
-const DISCRETE_TOLERANCE = 1e-12;
 function noNegativeZero(value) {
     return value === 0 ? 0 : value;
 }
@@ -152,13 +151,20 @@ function betaContinuedFraction(a, b, x) {
     }
     return h;
 }
-/** I_x(a, b) where `y` must equal `1 - x` (passed separately so callers keep tail precision). */
-function betaI(x, y, a, b) {
+/** ln B(a, b) = ln Γ(a) + ln Γ(b) − ln Γ(a + b). */
+function lnBeta(a, b) {
+    return lnGamma(a) + lnGamma(b) - lnGamma(a + b);
+}
+/**
+ * I_x(a, b) where `y` must equal `1 - x` (passed separately so callers keep tail precision).
+ * `lnB` = ln B(a, b); callers with fixed a, b pass it precomputed.
+ */
+function betaI(x, y, a, b, lnB = lnBeta(a, b)) {
     if (x <= 0)
         return 0;
     if (y <= 0)
         return 1;
-    const front = Math.exp(lnGamma(a + b) - lnGamma(a) - lnGamma(b) + a * Math.log(x) + b * Math.log(y));
+    const front = Math.exp(a * Math.log(x) + b * Math.log(y) - lnB);
     if (x < (a + 1) / (a + b + 2))
         return Math.min(1, (front * betaContinuedFraction(a, b, x)) / a);
     return Math.max(0, 1 - (front * betaContinuedFraction(b, a, y)) / b);
@@ -268,39 +274,76 @@ export function erfInv(p) {
     }
     return p < 0 ? -x : x;
 }
+const QUANTILE_MAX_ITER = 400;
+const QUANTILE_TOLERANCE = 1e-12;
+function outOfRange() {
+    return new NumericRangeError('quantile is outside the representable range');
+}
 /**
- * Inverts a monotone cdf: expands a bracket, then runs Newton steps (when a
- * pdf is given) safeguarded by bisection, to a ~1e-15 relative x tolerance.
+ * Bisection point: geometric when the bracket spans orders of magnitude on one
+ * side of 0, `hi / zeroFactor` while the lower end is still the support bound 0,
+ * else arithmetic.
+ */
+function bisectionPoint(lo, hi, zeroFactor) {
+    if (lo > 0 && hi > 64 * lo)
+        return Math.sqrt(lo) * Math.sqrt(hi);
+    if (hi < 0 && lo < 64 * hi)
+        return -Math.sqrt(-lo) * Math.sqrt(-hi);
+    if (lo === 0 && hi > 0)
+        return hi / zeroFactor;
+    return lo / 2 + hi / 2;
+}
+/** Grows a step factor by squaring, capped so a single step never jumps more than 2^64. */
+function nextFactor(factor) {
+    return Math.min(factor * factor, 2 ** 64);
+}
+/**
+ * Inverts a monotone cdf. First brackets the quantile, growing the bracket by
+ * squaring factors so tails many orders of magnitude out are reached in a few
+ * steps. Then runs Newton steps (when a pdf is given) safeguarded by bisection
+ * — geometric when the bracket spans orders of magnitude, and stepping toward a
+ * support bound of 0 by squaring factors — until |cdf(x) − p| ≤ 1e-12·max(p, 1 − p),
+ * which is meaningful however small the quantile is. If the bracket shrinks to
+ * adjacent doubles first, the endpoint with the smaller error is returned.
+ * Throws `NumericRangeError` if the iteration cap is hit.
  */
 function invertCdf(cdf, p, bracket, pdf) {
     let { lo, hi } = bracket;
+    let factor = 2;
     if (!bracket.loFixed) {
-        for (let n = 0; cdf(lo) > p; n++) {
-            if (n > 1000)
-                throw new NumericRangeError('quantile is outside the representable range');
+        while (cdf(lo) > p) {
+            if (lo === -Number.MAX_VALUE)
+                throw outOfRange();
             hi = lo;
-            lo *= 2;
+            lo = Math.max(lo * factor, -Number.MAX_VALUE);
+            factor = nextFactor(factor);
         }
     }
-    for (let n = 0; cdf(hi) < p; n++) {
-        if (n > 1000)
-            throw new NumericRangeError('quantile is outside the representable range');
+    factor = 2;
+    while (cdf(hi) < p) {
+        if (hi === Number.MAX_VALUE)
+            throw outOfRange();
         lo = hi;
-        hi *= 2;
+        hi = Math.min(hi * factor, Number.MAX_VALUE);
+        factor = nextFactor(factor);
     }
-    let x = (lo + hi) / 2;
-    for (let i = 0; i < 400; i++) {
+    const tolerance = QUANTILE_TOLERANCE * Math.max(p, 1 - p);
+    // While lo is still the support bound 0, bisection steps toward it by squaring factors.
+    let zeroFactor = 2;
+    let x = bisectionPoint(lo, hi, zeroFactor);
+    let previousError = Infinity;
+    for (let i = 0; i < QUANTILE_MAX_ITER; i++) {
         const f = cdf(x) - p;
-        if (f === 0)
+        const error = Math.abs(f);
+        if (error <= tolerance)
             return x;
         if (f > 0)
             hi = x;
         else
             lo = x;
-        if (hi - lo <= 1e-15 * Math.max(1, Math.abs(x)))
-            return x;
-        let next = (lo + hi) / 2;
-        if (pdf) {
+        let next = Number.NaN;
+        // Newton, unless the last step failed to halve the error (then bisect once).
+        if (pdf && error <= 0.5 * previousError) {
             const d = pdf(x);
             if (Number.isFinite(d) && d > 0) {
                 const newton = x - f / d;
@@ -308,13 +351,21 @@ function invertCdf(cdf, p, bracket, pdf) {
                     next = newton;
             }
         }
-        if (Math.abs(next - x) <= 1e-15 * (1 + Math.abs(x)))
-            return next;
+        previousError = Number.isNaN(next) ? Infinity : error;
+        if (Number.isNaN(next)) {
+            if (lo === 0)
+                zeroFactor = nextFactor(zeroFactor);
+            next = bisectionPoint(lo, hi, zeroFactor);
+            if (!(next > lo && next < hi)) {
+                // lo and hi are adjacent doubles: no representable x does better.
+                return Math.abs(cdf(lo) - p) <= Math.abs(cdf(hi) - p) ? lo : hi;
+            }
+        }
         x = next;
     }
-    return x;
+    throw new NumericRangeError(`quantile did not converge to |cdf(x) - p| <= ${tolerance} within ${QUANTILE_MAX_ITER} iterations (p = ${p})`);
 }
-function quantile(p, lower, upper, solve) {
+function solveQuantile(p, lower, upper, solve) {
     assertProbability(p);
     if (p === 0)
         return lower;
@@ -329,24 +380,30 @@ function quantile(p, lower, upper, solve) {
 export function normal(mean = 0, stddev = 1) {
     assertFinite(mean, 'mean');
     assertPositive(stddev, 'stddev');
+    const pdfNorm = stddev * SQRT_2PI;
+    const erfcScale = stddev * SQRT2;
+    const inv = (p) => solveQuantile(p, -Infinity, Infinity, () => mean + stddev * normalQuantile(p));
     return {
         pdf(x) {
             assertPoint(x, 'x');
             const z = (x - mean) / stddev;
-            return noNegativeZero(Math.exp(-0.5 * z * z) / (stddev * SQRT_2PI));
+            return noNegativeZero(Math.exp(-0.5 * z * z) / pdfNorm);
         },
         cdf(x) {
             assertPoint(x, 'x');
-            return noNegativeZero(0.5 * erfcRaw(-(x - mean) / (stddev * SQRT2)));
+            return noNegativeZero(0.5 * erfcRaw(-(x - mean) / erfcScale));
         },
-        inv(p) {
-            return quantile(p, -Infinity, Infinity, () => mean + stddev * normalQuantile(p));
+        sf(x) {
+            assertPoint(x, 'x');
+            return noNegativeZero(0.5 * erfcRaw((x - mean) / erfcScale));
         },
+        inv,
+        quantile: inv,
         mean,
         variance: stddev * stddev,
     };
 }
-function studentTCdf(x, df) {
+function studentTCdf(x, df, lnB) {
     if (x === Infinity)
         return 1;
     if (x === -Infinity)
@@ -354,18 +411,26 @@ function studentTCdf(x, df) {
     if (x === 0)
         return 0.5;
     const t2 = x * x;
-    const tail = 0.5 * betaI(df / (df + t2), t2 / (df + t2), df / 2, 0.5);
+    const tail = Number.isFinite(t2)
+        ? 0.5 * betaI(df / (df + t2), t2 / (df + t2), df / 2, 0.5, lnB)
+        : 0.5 * betaI(df / x / x, 1, df / 2, 0.5, lnB);
     return x > 0 ? 1 - tail : tail;
 }
-function studentTPdf(x, df) {
-    const lnNorm = lnGamma((df + 1) / 2) - lnGamma(df / 2) - 0.5 * Math.log(df * Math.PI);
+/** ln of the central t density's normalizer, ln Γ((df+1)/2) − ln Γ(df/2) − ½ ln(df·π). */
+function studentTLnNorm(df) {
+    return lnGamma((df + 1) / 2) - lnGamma(df / 2) - 0.5 * Math.log(df * Math.PI);
+}
+function studentTPdf(x, df, lnNorm) {
     return Math.exp(lnNorm - ((df + 1) / 2) * Math.log1p((x * x) / df));
 }
 /** Student's t distribution with `df > 0` degrees of freedom. */
 export function studentT(df) {
     assertPositive(df, 'df');
-    const cdf = (x) => studentTCdf(x, df);
-    const pdf = (x) => studentTPdf(x, df);
+    const lnB = lnBeta(df / 2, 0.5);
+    const lnNorm = studentTLnNorm(df);
+    const cdf = (x) => studentTCdf(x, df, lnB);
+    const pdf = (x) => studentTPdf(x, df, lnNorm);
+    const inv = (p) => solveQuantile(p, -Infinity, Infinity, () => p === 0.5 ? 0 : invertCdf(cdf, p, { lo: -1, hi: 1, loFixed: false }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -375,14 +440,16 @@ export function studentT(df) {
             assertPoint(x, 'x');
             return noNegativeZero(cdf(x));
         },
-        inv(p) {
-            return quantile(p, -Infinity, Infinity, () => p === 0.5 ? 0 : invertCdf(cdf, p, { lo: -1, hi: 1, loFixed: false }, pdf));
+        sf(x) {
+            assertPoint(x, 'x');
+            return noNegativeZero(cdf(-x));
         },
+        inv,
+        quantile: inv,
         mean: df > 1 ? 0 : undefined,
         variance: df > 2 ? df / (df - 2) : df > 1 ? Infinity : undefined,
     };
 }
-/** Largest |ncp| the AS 243 series handles before exp(−ncp²/2) underflows. */
 /**
  * Largest |ncp| `noncentralT` accepts: beyond it `exp(−ncp²/2)` underflows in
  * the AS 243 series. Power is already 1 (or 0) to double precision there, so
@@ -390,43 +457,60 @@ export function studentT(df) {
  */
 export const MAX_NONCENTRALITY = 37.62;
 const MAX_NCP = MAX_NONCENTRALITY;
-function nctCdf(t, df, ncp) {
-    if (t === Infinity)
-        return 1;
-    if (t === -Infinity)
-        return 0;
-    if (ncp === 0)
-        return studentTCdf(t, df);
-    const negative = t < 0;
-    const tt = Math.abs(t);
-    const del = negative ? -ncp : ncp;
-    let tnc;
-    if (df > 4e5) {
-        // Lenth's normal approximation for very large df.
-        const s = 1 / (4 * df);
-        tnc = 0.5 * erfcRaw(-(tt * (1 - s) - del) / (Math.sqrt(1 + tt * tt * 2 * s) * SQRT2));
-        return Math.min(1, Math.max(0, negative ? 1 - tnc : tnc));
-    }
-    const x = (tt * tt) / (tt * tt + df);
-    const y = df / (tt * tt + df);
-    tnc = 0;
-    if (x > 0) {
+const SQRT_2_OVER_PI = Math.sqrt(2 / Math.PI);
+const NCT_MAX_TERMS = 5000;
+const NCT_RELATIVE_ERROR = 1e-15;
+function nctKernel(df, ncp) {
+    const b = 0.5 * df;
+    const lnB = lnBeta(0.5, b);
+    const lambda = ncp * ncp;
+    const p0 = 0.5 * Math.exp(-0.5 * lambda);
+    const q0 = SQRT_2_OVER_PI * p0;
+    const phiOf = [0.5 * erfcRaw(ncp / SQRT2), 0.5 * erfcRaw(-ncp / SQRT2)];
+    const lenthS = 1 / (4 * df);
+    return (tt, flip) => {
+        const del = flip ? -ncp : ncp;
+        const phi = phiOf[flip ? 1 : 0] ?? 0;
+        if (df > 4e5) {
+            // Lenth's normal approximation for very large df (written to stay finite as tt → ∞).
+            const s = lenthS;
+            const z = tt > 1
+                ? (1 - s - del / tt) / Math.sqrt(1 / (tt * tt) + 2 * s)
+                : (tt * (1 - s) - del) / Math.sqrt(1 + tt * tt * 2 * s);
+            return 0.5 * erfcRaw(-z / SQRT2);
+        }
+        if (tt === 0)
+            return phi;
+        // x = t²/(t²+df), y = df/(t²+df) = 1 − x, formed so neither overflows nor loses the tail.
+        const t2 = tt * tt;
+        let x;
+        let y;
+        if (Number.isFinite(t2)) {
+            x = t2 / (t2 + df);
+            y = df / (t2 + df);
+        }
+        else {
+            const r = df / tt / tt;
+            x = 1 / (1 + r);
+            y = r / (1 + r);
+        }
+        // y underflowed: every incomplete beta term is exactly 1, so the series sums to its limit, 1.
+        if (y === 0)
+            return 1;
         // Lenth (1989), AS 243: Poisson-weighted series of incomplete beta terms.
-        const lambda = del * del;
-        let p = 0.5 * Math.exp(-0.5 * lambda);
-        let q = (Math.SQRT2 / Math.sqrt(Math.PI)) * p * del;
+        let p = p0;
+        let q = q0 * del;
         let s = 0.5 - p;
-        const b = 0.5 * df;
         let a = 0.5;
-        const rxb = Math.exp(b * Math.log(y));
-        const albeta = LN_SQRT_PI + lnGamma(b) - lnGamma(0.5 + b);
-        let xodd = betaI(x, y, a, b);
-        let godd = 2 * rxb * Math.exp(a * Math.log(x) - albeta);
-        tnc = b * x;
-        let xeven = tnc < EPS ? tnc : -Math.expm1(b * Math.log(y));
-        let geven = tnc * rxb;
-        tnc = p * xodd + q * xeven;
-        for (let it = 1; it < 5000; it++) {
+        const lnY = Math.log(y);
+        const rxb = Math.exp(b * lnY);
+        let xodd = betaI(x, y, a, b, lnB);
+        let godd = 2 * rxb * Math.exp(a * Math.log(x) - lnB);
+        const bx = b * x;
+        let xeven = bx < EPS ? bx : -Math.expm1(b * lnY);
+        let geven = bx * rxb;
+        let tnc = p * xodd + q * xeven;
+        for (let it = 1; it < NCT_MAX_TERMS; it++) {
             a += 1;
             xodd -= godd;
             xeven -= geven;
@@ -440,48 +524,125 @@ function nctCdf(t, df, ncp) {
                 break;
             if (s <= 0 && it > 1)
                 break;
-            if (Math.abs(2 * s * (xodd - godd)) < 1e-14)
+            // Stop once the remaining-terms bound is negligible relative to the running value.
+            if (Math.abs(2 * s * (xodd - godd)) <= NCT_RELATIVE_ERROR * Math.abs(tnc + phi))
                 break;
         }
-    }
-    tnc += 0.5 * erfcRaw(del / SQRT2);
-    return Math.min(1, Math.max(0, negative ? 1 - tnc : tnc));
+        return tnc + phi;
+    };
+}
+function nctCdfFrom(kernel, t) {
+    if (t === Infinity)
+        return 1;
+    if (t === -Infinity)
+        return 0;
+    const v = t >= 0 ? kernel(t, false) : 1 - kernel(-t, true);
+    return Math.min(1, Math.max(0, v));
+}
+function nctSfFrom(kernel, t) {
+    if (t === Infinity)
+        return 0;
+    if (t === -Infinity)
+        return 1;
+    const v = t >= 0 ? 1 - kernel(t, false) : kernel(-t, true);
+    return Math.min(1, Math.max(0, v));
 }
 /**
+ * Noncentral t density near 0 by the Johnson–Kotz–Balakrishnan power series
+ * f(x) = C(x) · Σⱼ Γ((df+j+1)/2)/(Γ((df+1)/2)·j!) · zʲ, z = ncp·x·√2/√(df+x²),
+ * split into even and odd terms with exact ratio recurrences and rescaled
+ * before it can overflow. For z ≥ 0 every term is positive, so it is stable
+ * at any size; for z < 0 the terms alternate, so it is only used while
+ * |z|·√((df+1)/2) ≤ 2.5 (cancellation then costs < 3 digits).
+ */
+function nctPdfSeries(x, df, lnC, gammaRatio, z) {
+    const z2 = z * z;
+    let even = 1;
+    let odd = gammaRatio * z;
+    let sum = even + odd;
+    let lnScale = 0;
+    for (let k = 0; k < NCT_PDF_MAX_TERMS; k++) {
+        even *= ((df + 2 * k + 1) / 2) * (z2 / ((2 * k + 1) * (2 * k + 2)));
+        odd *= ((df + 2 * k + 2) / 2) * (z2 / ((2 * k + 2) * (2 * k + 3)));
+        sum += even + odd;
+        if (sum > 1e280) {
+            even /= 1e280;
+            odd /= 1e280;
+            sum /= 1e280;
+            lnScale += LN_1E280;
+        }
+        if (Math.abs(even) + Math.abs(odd) <= 1e-17 * Math.abs(sum))
+            break;
+    }
+    return Math.exp(lnC + lnScale - ((df + 1) / 2) * Math.log(df + x * x)) * sum;
+}
+const NCT_PDF_MAX_TERMS = 4000;
+const LN_1E280 = Math.log(1e280);
+/** Largest |z|·√((df+1)/2) at which the alternating (z < 0) power series is used. */
+const NCT_SERIES_LIMIT = 2.5;
+/**
+ * Largest z·√((df+1)/2) at which the all-positive (z ≥ 0) series is used; with
+ * z < √2·37.62 this bounds the series to well under NCT_PDF_MAX_TERMS terms.
+ */
+const NCT_POSITIVE_SERIES_LIMIT = 400;
+/**
  * Noncentral t distribution with `df > 0` degrees of freedom and noncentrality
- * `ncp` (|ncp| ≤ 37.62). `cdf` is Lenth's (1989) AS 243 series (~1e-12; a normal
- * approximation is used for df > 4e5). `pdf` uses the exact identity
- * f(x) = df/x · [F(x·√(1+2/df); df+2) − F(x; df)]. `inv` brackets then bisects
- * the cdf to ~1e-15 in x. With `ncp = 0` it equals `studentT(df)`.
+ * `ncp` (|ncp| ≤ 37.62). `cdf` is Lenth's (1989) AS 243 series (~1e-14; a normal
+ * approximation is used for df > 4e5); it returns the exact limits 1 / 0 once
+ * df/x² underflows. `pdf` uses the Johnson–Kotz–Balakrishnan power series on
+ * the side of 0 where x and ncp share a sign (all terms positive) and close to
+ * 0 on the other side; elsewhere it uses the identity
+ * f(x) = df/x · [F(x·√(1+2/df); df+2) − F(x; df)], where the cdf difference no
+ * longer cancels (accurate to ~1e-15 absolute, so relative accuracy fades only
+ * where the density itself is below ~1e-13). `inv` is the safeguarded Newton solver.
+ * With `ncp = 0` it equals `studentT(df)`.
  */
 export function noncentralT(df, ncp) {
     assertPositive(df, 'df');
     assertFinite(ncp, 'ncp');
     if (Math.abs(ncp) > MAX_NCP)
         throw new InvalidArgumentError(`ncp must be within ±${MAX_NCP}, got ${ncp}`);
-    const cdf = (x) => nctCdf(x, df, ncp);
-    const lnCentral = lnGamma((df + 1) / 2) - lnGamma(df / 2) - 0.5 * Math.log(df * Math.PI);
     const mean = df > 1 ? ncp * Math.sqrt(df / 2) * Math.exp(lnGamma((df - 1) / 2) - lnGamma(df / 2)) : undefined;
+    const variance = mean !== undefined && df > 2 ? (df * (1 + ncp * ncp)) / (df - 2) - mean * mean : df > 1 ? Infinity : undefined;
+    if (ncp === 0) {
+        const central = studentT(df);
+        return { ...central, mean, variance };
+    }
+    const kernel = nctKernel(df, ncp);
+    const kernelPlus2 = nctKernel(df + 2, ncp);
+    const cdf = (x) => nctCdfFrom(kernel, x);
+    const stretch = Math.sqrt(1 + 2 / df);
+    const halfDfPlus1 = (df + 1) / 2;
+    const seriesScale = Math.sqrt(halfDfPlus1);
+    const lnC = (df / 2) * Math.log(df) - (ncp * ncp) / 2 + lnGamma(halfDfPlus1) - lnGamma(df / 2) - LN_SQRT_PI;
+    const gammaRatio = Math.exp(lnGamma(df / 2 + 1) - lnGamma(halfDfPlus1));
+    const pdf = (x) => {
+        if (!Number.isFinite(x))
+            return 0;
+        const z = (ncp * x * SQRT2) / Math.sqrt(df + x * x);
+        const w = z * seriesScale;
+        if (w >= -NCT_SERIES_LIMIT && w <= NCT_POSITIVE_SERIES_LIMIT)
+            return nctPdfSeries(x, df, lnC, gammaRatio, z);
+        return Math.max(0, (df / x) * (nctCdfFrom(kernelPlus2, x * stretch) - cdf(x)));
+    };
+    const inv = (p) => solveQuantile(p, -Infinity, Infinity, () => invertCdf(cdf, p, { lo: -1, hi: 1, loFixed: false }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
-            if (!Number.isFinite(x))
-                return 0;
-            if (ncp === 0)
-                return studentTPdf(x, df);
-            if (x === 0)
-                return Math.exp(lnCentral - (ncp * ncp) / 2);
-            return Math.max(0, (df / x) * (nctCdf(x * Math.sqrt(1 + 2 / df), df + 2, ncp) - cdf(x)));
+            return noNegativeZero(pdf(x));
         },
         cdf(x) {
             assertPoint(x, 'x');
             return noNegativeZero(cdf(x));
         },
-        inv(p) {
-            return quantile(p, -Infinity, Infinity, () => invertCdf(cdf, p, { lo: -1, hi: 1, loFixed: false }));
+        sf(x) {
+            assertPoint(x, 'x');
+            return noNegativeZero(nctSfFrom(kernel, x));
         },
+        inv,
+        quantile: inv,
         mean,
-        variance: mean !== undefined && df > 2 ? (df * (1 + ncp * ncp)) / (df - 2) - mean * mean : df > 1 ? Infinity : undefined,
+        variance,
     };
 }
 /** Chi-square distribution with `df > 0` degrees of freedom. */
@@ -489,6 +650,7 @@ export function chiSquare(df) {
     assertPositive(df, 'df');
     const k = df / 2;
     const gln = lnGamma(k);
+    const lnNorm = k * Math.LN2 + gln;
     const cdf = (x) => {
         if (x <= 0)
             return 0;
@@ -501,8 +663,9 @@ export function chiSquare(df) {
             return 0;
         if (x === 0)
             return df < 2 ? Infinity : df === 2 ? 0.5 : 0;
-        return Math.exp((k - 1) * Math.log(x) - x / 2 - k * Math.LN2 - gln);
+        return Math.exp((k - 1) * Math.log(x) - x / 2 - lnNorm);
     };
+    const inv = (p) => solveQuantile(p, 0, Infinity, () => invertCdf(cdf, p, { lo: 0, hi: Math.max(1, df), loFixed: true }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -512,9 +675,16 @@ export function chiSquare(df) {
             assertPoint(x, 'x');
             return noNegativeZero(cdf(x));
         },
-        inv(p) {
-            return quantile(p, 0, Infinity, () => invertCdf(cdf, p, { lo: 0, hi: Math.max(1, df), loFixed: true }, pdf));
+        sf(x) {
+            assertPoint(x, 'x');
+            if (x <= 0)
+                return 1;
+            if (x === Infinity)
+                return 0;
+            return noNegativeZero(gammaPQ(k, x / 2, gln).q);
         },
+        inv,
+        quantile: inv,
         mean: df,
         variance: 2 * df,
     };
@@ -523,23 +693,27 @@ export function chiSquare(df) {
 export function fisherF(df1, df2) {
     assertPositive(df1, 'df1');
     assertPositive(df2, 'df2');
-    const lnBeta = lnGamma(df1 / 2) + lnGamma(df2 / 2) - lnGamma((df1 + df2) / 2);
+    const a = df1 / 2;
+    const b = df2 / 2;
+    const lnB = lnBeta(a, b);
+    const lnPdfConst = 0.5 * df2 * Math.log(df2) - lnB;
     const cdf = (x) => {
         if (x <= 0)
             return 0;
         if (x === Infinity)
             return 1;
         const d = df1 * x + df2;
-        return betaI((df1 * x) / d, df2 / d, df1 / 2, df2 / 2);
+        return betaI((df1 * x) / d, df2 / d, a, b, lnB);
     };
     const pdf = (x) => {
         if (x < 0 || x === Infinity)
             return 0;
         if (x === 0)
             return df1 < 2 ? Infinity : df1 === 2 ? 1 : 0;
-        const lnNum = 0.5 * (df1 * Math.log(df1 * x) + df2 * Math.log(df2) - (df1 + df2) * Math.log(df1 * x + df2));
-        return Math.exp(lnNum - Math.log(x) - lnBeta);
+        const lnNum = 0.5 * (df1 * Math.log(df1 * x) - (df1 + df2) * Math.log(df1 * x + df2));
+        return Math.exp(lnNum + lnPdfConst - Math.log(x));
     };
+    const inv = (p) => solveQuantile(p, 0, Infinity, () => invertCdf(cdf, p, { lo: 0, hi: 1, loFixed: true }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -549,9 +723,18 @@ export function fisherF(df1, df2) {
             assertPoint(x, 'x');
             return noNegativeZero(cdf(x));
         },
-        inv(p) {
-            return quantile(p, 0, Infinity, () => invertCdf(cdf, p, { lo: 0, hi: 1, loFixed: true }, pdf));
+        sf(x) {
+            assertPoint(x, 'x');
+            if (x <= 0)
+                return 1;
+            if (x === Infinity)
+                return 0;
+            const d = df1 * x + df2;
+            // 1 − I_u(a, b) = I_{1−u}(b, a), evaluated on its own accurate side.
+            return noNegativeZero(betaI(df2 / d, (df1 * x) / d, b, a, lnB));
         },
+        inv,
+        quantile: inv,
         mean: df2 > 2 ? df2 / (df2 - 2) : undefined,
         variance: df2 > 4
             ? (2 * df2 * df2 * (df1 + df2 - 2)) / (df1 * (df2 - 2) * (df2 - 2) * (df2 - 4))
@@ -563,6 +746,7 @@ export function fisherF(df1, df2) {
 /** Exponential distribution with `rate > 0`. */
 export function exponential(rate) {
     assertPositive(rate, 'rate');
+    const inv = (p) => solveQuantile(p, 0, Infinity, () => -Math.log1p(-p) / rate);
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -572,9 +756,12 @@ export function exponential(rate) {
             assertPoint(x, 'x');
             return x <= 0 ? 0 : noNegativeZero(-Math.expm1(-rate * x));
         },
-        inv(p) {
-            return quantile(p, 0, Infinity, () => -Math.log1p(-p) / rate);
+        sf(x) {
+            assertPoint(x, 'x');
+            return x <= 0 ? 1 : noNegativeZero(Math.exp(-rate * x));
         },
+        inv,
+        quantile: inv,
         mean: 1 / rate,
         variance: 1 / (rate * rate),
     };
@@ -586,6 +773,7 @@ export function uniform(min, max) {
     if (!(min < max))
         throw new InvalidArgumentError(`min (${min}) must be less than max (${max})`);
     const width = max - min;
+    const inv = (p) => solveQuantile(p, min, max, () => min + p * width);
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -595,9 +783,12 @@ export function uniform(min, max) {
             assertPoint(x, 'x');
             return x <= min ? 0 : x >= max ? 1 : noNegativeZero((x - min) / width);
         },
-        inv(p) {
-            return quantile(p, min, max, () => min + p * width);
+        sf(x) {
+            assertPoint(x, 'x');
+            return x <= min ? 1 : x >= max ? 0 : noNegativeZero((max - x) / width);
         },
+        inv,
+        quantile: inv,
         mean: (min + max) / 2,
         variance: (width * width) / 12,
     };
@@ -605,14 +796,13 @@ export function uniform(min, max) {
 // ---------------------------------------------------------------------------
 // Discrete distributions
 // ---------------------------------------------------------------------------
-/** Smallest k in [0, upper] with cdf(k) ≥ p (within tolerance), by binary search. */
+/** Smallest k in [0, upper] with cdf(k) ≥ p exactly (no tolerance), by binary search. */
 function searchDiscrete(cdf, p, upper) {
-    const target = p * (1 - DISCRETE_TOLERANCE);
     let lo = 0;
     let hi = upper;
     while (lo < hi) {
         const mid = Math.floor((lo + hi) / 2);
-        if (cdf(mid) >= target)
+        if (cdf(mid) >= p)
             hi = mid;
         else
             lo = mid + 1;
@@ -629,6 +819,8 @@ export function binomial(n, p) {
     if (p < 0 || p > 1)
         throw new InvalidArgumentError(`p must be in [0, 1], got ${p}`);
     const lnN = lnGamma(n + 1);
+    const lnP = Math.log(p);
+    const ln1mP = Math.log1p(-p);
     const cdf = (k) => {
         if (k < 0)
             return 0;
@@ -636,6 +828,14 @@ export function binomial(n, p) {
             return 1;
         const f = Math.floor(k);
         return betaI(1 - p, p, n - f, f + 1);
+    };
+    const inv = (q) => {
+        assertProbability(q);
+        if (q === 0)
+            return 0;
+        if (q === 1)
+            return n;
+        return searchDiscrete(cdf, q, n);
     };
     return {
         pmf(k) {
@@ -646,20 +846,24 @@ export function binomial(n, p) {
                 return k === 0 ? 1 : 0;
             if (p === 1)
                 return k === n ? 1 : 0;
-            return Math.exp(lnN - lnGamma(k + 1) - lnGamma(n - k + 1) + k * Math.log(p) + (n - k) * Math.log1p(-p));
+            return Math.exp(lnN - lnGamma(k + 1) - lnGamma(n - k + 1) + k * lnP + (n - k) * ln1mP);
         },
         cdf(k) {
             assertPoint(k, 'k');
             return noNegativeZero(cdf(k));
         },
-        inv(q) {
-            assertProbability(q);
-            if (q === 0)
+        sf(k) {
+            assertPoint(k, 'k');
+            if (k < 0)
+                return 1;
+            if (k >= n)
                 return 0;
-            if (q === 1)
-                return n;
-            return searchDiscrete(cdf, q, n);
+            const f = Math.floor(k);
+            // P(X > f) = I_p(f + 1, n − f), the complement of the cdf's I_{1−p}(n − f, f + 1).
+            return noNegativeZero(betaI(p, 1 - p, f + 1, n - f));
         },
+        inv,
+        quantile: inv,
         mean: n * p,
         variance: n * p * (1 - p),
     };
@@ -675,6 +879,17 @@ export function poisson(lambda) {
             return 1;
         return gammaPQ(Math.floor(k) + 1, lambda).q;
     };
+    const inv = (q) => {
+        assertProbability(q);
+        if (q === 0)
+            return 0;
+        if (q === 1)
+            return Infinity;
+        let hi = Math.max(1, Math.ceil(lambda));
+        while (cdf(hi) < q)
+            hi *= 2;
+        return searchDiscrete(cdf, q, hi);
+    };
     return {
         pmf(k) {
             assertPoint(k, 'k');
@@ -686,18 +901,16 @@ export function poisson(lambda) {
             assertPoint(k, 'k');
             return noNegativeZero(cdf(k));
         },
-        inv(q) {
-            assertProbability(q);
-            if (q === 0)
+        sf(k) {
+            assertPoint(k, 'k');
+            if (k < 0)
+                return 1;
+            if (k === Infinity)
                 return 0;
-            if (q === 1)
-                return Infinity;
-            const target = q * (1 - DISCRETE_TOLERANCE);
-            let hi = Math.max(1, Math.ceil(lambda));
-            while (cdf(hi) < target)
-                hi *= 2;
-            return searchDiscrete(cdf, q, hi);
+            return noNegativeZero(gammaPQ(Math.floor(k) + 1, lambda).p);
         },
+        inv,
+        quantile: inv,
         mean: lambda,
         variance: lambda,
     };

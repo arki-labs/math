@@ -13,8 +13,15 @@ export type ContinuousDistribution = {
     pdf(x: number): number;
     /** P(X ≤ x). */
     cdf(x: number): number;
-    /** Quantile: the x with cdf(x) = p, p in (0, 1); p = 0 / 1 return the support bounds (±Infinity where unbounded). */
+    /** Survival function P(X > x) = 1 − cdf(x), computed on the accurate side where the distribution allows. */
+    sf(x: number): number;
+    /**
+     * Quantile: the x with cdf(x) = p, p in (0, 1), solved until |cdf(x) − p| ≤ 1e-12·max(p, 1 − p);
+     * p = 0 / 1 return the support bounds (±Infinity where unbounded). Short form of `quantile`.
+     */
     inv(p: number): number;
+    /** Quantile function; identical to `inv`. */
+    quantile(p: number): number;
     /** Expected value, or `undefined` when the distribution has none. */
     readonly mean: number | undefined;
     /** Variance: `Infinity` when it diverges, `undefined` when the distribution has none. */
@@ -26,8 +33,16 @@ export type DiscreteDistribution = {
     pmf(k: number): number;
     /** P(X ≤ k). */
     cdf(k: number): number;
-    /** Smallest k with cdf(k) ≥ p (compared with a 1e-12 relative tolerance). */
+    /** Survival function P(X > k) = 1 − cdf(k), computed on the accurate side. */
+    sf(k: number): number;
+    /**
+     * Quantile: exactly the smallest integer k with `cdf(k) >= p`, using this object's own `cdf`
+     * (no tolerance), so `inv(cdf(k)) === k`. p = 0 gives 0; p = 1 gives the support's upper bound.
+     * Short form of `quantile`.
+     */
     inv(p: number): number;
+    /** Quantile function; identical to `inv`. */
+    quantile(p: number): number;
     /** Expected value. */
     readonly mean: number;
     /** Variance. */
@@ -49,7 +64,6 @@ export declare function erfInv(p: number): number;
 export declare function normal(mean?: number, stddev?: number): ContinuousDistribution;
 /** Student's t distribution with `df > 0` degrees of freedom. */
 export declare function studentT(df: number): ContinuousDistribution;
-/** Largest |ncp| the AS 243 series handles before exp(−ncp²/2) underflows. */
 /**
  * Largest |ncp| `noncentralT` accepts: beyond it `exp(−ncp²/2)` underflows in
  * the AS 243 series. Power is already 1 (or 0) to double precision there, so
@@ -58,10 +72,15 @@ export declare function studentT(df: number): ContinuousDistribution;
 export declare const MAX_NONCENTRALITY = 37.62;
 /**
  * Noncentral t distribution with `df > 0` degrees of freedom and noncentrality
- * `ncp` (|ncp| ≤ 37.62). `cdf` is Lenth's (1989) AS 243 series (~1e-12; a normal
- * approximation is used for df > 4e5). `pdf` uses the exact identity
- * f(x) = df/x · [F(x·√(1+2/df); df+2) − F(x; df)]. `inv` brackets then bisects
- * the cdf to ~1e-15 in x. With `ncp = 0` it equals `studentT(df)`.
+ * `ncp` (|ncp| ≤ 37.62). `cdf` is Lenth's (1989) AS 243 series (~1e-14; a normal
+ * approximation is used for df > 4e5); it returns the exact limits 1 / 0 once
+ * df/x² underflows. `pdf` uses the Johnson–Kotz–Balakrishnan power series on
+ * the side of 0 where x and ncp share a sign (all terms positive) and close to
+ * 0 on the other side; elsewhere it uses the identity
+ * f(x) = df/x · [F(x·√(1+2/df); df+2) − F(x; df)], where the cdf difference no
+ * longer cancels (accurate to ~1e-15 absolute, so relative accuracy fades only
+ * where the density itself is below ~1e-13). `inv` is the safeguarded Newton solver.
+ * With `ncp = 0` it equals `studentT(df)`.
  */
 export declare function noncentralT(df: number, ncp: number): ContinuousDistribution;
 /** Chi-square distribution with `df > 0` degrees of freedom. */

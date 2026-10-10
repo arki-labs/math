@@ -6,7 +6,6 @@
  */
 import type { RoundingMode } from '../rounding.js';
 import type { ScaleOptions } from './fraction.js';
-import type { DecimalParts } from './parse.js';
 export type { ScaleOptions } from './fraction.js';
 export type DecimalInput = Decimal | string | number | bigint;
 export type RationalInput = Rational | DecimalInput;
@@ -21,10 +20,11 @@ export declare class Decimal {
     readonly coefficient: bigint;
     readonly scale: number;
     private constructor();
-    /** @internal */
-    static fromParts(parts: DecimalParts): Decimal;
     static from(value: DecimalInput): Decimal;
+    /** Exact sum; accumulates one coefficient instead of allocating a Decimal per element. */
     static sum(values: Iterable<DecimalInput>): Decimal;
+    /** Comparator for sorting: `prices.sort(Decimal.compare)`. */
+    static compare(a: DecimalInput, b: DecimalInput): -1 | 0 | 1;
     static max(first: DecimalInput, ...rest: DecimalInput[]): Decimal;
     static min(first: DecimalInput, ...rest: DecimalInput[]): Decimal;
     plus(other: DecimalInput): Decimal;
@@ -96,8 +96,10 @@ export declare class Rational {
     /** Normalizes sign and reduces by the GCD. */
     static fromParts(numerator: bigint, denominator: bigint): Rational;
     static from(value: RationalInput): Rational;
+    /** Knuth's addition: reduce through the denominators' GCD instead of the full product. */
     plus(other: RationalInput): Rational;
     minus(other: RationalInput): Rational;
+    /** Cross-cancels before multiplying, so the products never carry common factors. */
     times(other: RationalInput): Rational;
     dividedBy(other: RationalInput): Rational;
     /** Integer exponent; negative exponents invert. */
@@ -127,7 +129,11 @@ export declare class Rational {
     toDecimal(options?: ScaleOptions): Decimal;
     /** `7/2` → `{ whole: 3n, fraction: 1/2 }`; `-7/2` → `{ whole: -3n, fraction: -1/2 }`. */
     toMixed(): MixedNumber;
-    /** The nearest double, computed through ~20 significant decimal digits. */
+    /**
+     * The nearest double, ties to even, by rounding in binary (never through a
+     * decimal string, which could round twice). Throws on overflow, or when a
+     * non-zero value would underflow to zero.
+     */
     toNumber(): number;
     /** Requires an integral value. */
     toBigInt(): bigint;
