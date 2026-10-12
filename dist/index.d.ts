@@ -14,4 +14,7 @@ export * from './parse.js';
 export * from './random.js';
 export * from './fluent.js';
 export * from './words.js';
+export * from './money.js';
+export * from './units.js';
+export * from './finance.js';
 //# sourceMappingURL=index.d.ts.map

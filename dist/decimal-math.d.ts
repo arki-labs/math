@@ -26,20 +26,8 @@
  * a millisecond at 50 digits, about 10 ms at 1 000, and a few seconds for a
  * logarithm at 10 000.
  */
-import type { DecimalInput } from './decimal.js';
-import type { RoundingMode } from './rounding.js';
+import type { DecimalInput, ScaleOptions } from './decimal.js';
 import { Decimal } from './decimal.js';
-/**
- * Number of fraction digits in the result and how to round the last one.
- * Transcendental results are never exact, so rounding defaults to
- * `'halfEven'` here (unlike Decimal's own `'unnecessary'`).
- */
-export type DecimalMathOptions = {
-    scale: number;
-    rounding?: RoundingMode;
-};
-/** @deprecated Renamed to `DecimalMathOptions`: `scale` counts fraction digits, not significant digits. */
-export type PrecisionOptions = DecimalMathOptions;
 /**
  * Square root. Without options the result must be exact or it throws
  * `RoundingNecessaryError`: `sqrt(16)` → `4`, `sqrt('2.25')` → `1.5`,
@@ -51,13 +39,13 @@ export type PrecisionOptions = DecimalMathOptions;
  * rounding `'halfEven'`): `sqrt(2, { scale: 3, rounding: 'floor' })` → `1.414`.
  * Negative input throws `InvalidArgumentError`.
  */
-export declare function sqrt(value: DecimalInput, options?: DecimalMathOptions): Decimal;
+export declare function sqrt(value: DecimalInput, options?: ScaleOptions): Decimal;
 /**
  * Cube root; negative input gives a negative root. Same exact-or-throw rule
  * as `sqrt` (scale s padded up to a multiple of 3, then divided by 3):
  * `cbrt('-27')` → `-3`, `cbrt(2, { scale: 5 })` → `1.25992`.
  */
-export declare function cbrt(value: DecimalInput, options?: DecimalMathOptions): Decimal;
+export declare function cbrt(value: DecimalInput, options?: ScaleOptions): Decimal;
 /**
  * The n-th root for a positive safe integer `n`. Same exact-or-throw rule as
  * `sqrt` (scale padded up to a multiple of n, then divided by n):
@@ -65,7 +53,7 @@ export declare function cbrt(value: DecimalInput, options?: DecimalMathOptions):
  * `InvalidArgumentError`; odd roots keep the sign. Intermediates are capped at
  * 200 000 digits (`ResourceLimitError`), which bounds `n × scale`.
  */
-export declare function nthRoot(value: DecimalInput, n: number, options?: DecimalMathOptions): Decimal;
+export declare function nthRoot(value: DecimalInput, n: number, options?: ScaleOptions): Decimal;
 /**
  * e^x, correctly rounded to `scale` fraction digits. `exp(0)` is exactly 1;
  * every other result is irrational, so `rounding: 'unnecessary'` throws.
@@ -73,23 +61,23 @@ export declare function nthRoot(value: DecimalInput, n: number, options?: Decima
  * x > 23 000 at small scales) throw `ResourceLimitError`. Very negative x
  * rounds to zero (or one unit for `'up'`/`'ceiling'`).
  */
-export declare function exp(value: DecimalInput, options: DecimalMathOptions): Decimal;
+export declare function exp(value: DecimalInput, options: ScaleOptions): Decimal;
 /**
  * Natural logarithm, correctly rounded to `scale` fraction digits.
  * `ln(1)` is exactly 0; values ≤ 0 throw `InvalidArgumentError`.
  * `ln 2` and `ln 10` are computed once per precision and reused.
  */
-export declare function ln(value: DecimalInput, options: DecimalMathOptions): Decimal;
+export declare function ln(value: DecimalInput, options: ScaleOptions): Decimal;
 /**
  * Logarithm of `value` in `base` (> 0, ≠ 1), correctly rounded to `scale`
  * fraction digits. Exact results are detected — `log(8, 2)` → `3`,
  * `log(8, 4)` → `1.5` — so `rounding: 'unnecessary'` accepts them.
  */
-export declare function log(value: DecimalInput, base: DecimalInput, options: DecimalMathOptions): Decimal;
+export declare function log(value: DecimalInput, base: DecimalInput, options: ScaleOptions): Decimal;
 /** Base-10 logarithm, correctly rounded: `log10(1000, { scale: 5 })` → `3.00000`. */
-export declare function log10(value: DecimalInput, options: DecimalMathOptions): Decimal;
+export declare function log10(value: DecimalInput, options: ScaleOptions): Decimal;
 /** Base-2 logarithm, correctly rounded: `log2(1024, { scale: 5 })` → `10.00000`. */
-export declare function log2(value: DecimalInput, options: DecimalMathOptions): Decimal;
+export declare function log2(value: DecimalInput, options: ScaleOptions): Decimal;
 /**
  * `base` raised to `exponent`.
  *
@@ -103,7 +91,7 @@ export declare function log2(value: DecimalInput, options: DecimalMathOptions): 
  *   cases are detected: `pow(4, '0.5', { scale: 2 })` → `2.00`.
  * - Results over 10 000 digits throw `ResourceLimitError`.
  */
-export declare function pow(base: DecimalInput, exponent: DecimalInput, options?: DecimalMathOptions): Decimal;
+export declare function pow(base: DecimalInput, exponent: DecimalInput, options?: ScaleOptions): Decimal;
 /** π to `scale` fraction digits, rounded half-even. Machin's formula, cached per precision. */
 export declare function PI(scale: number): Decimal;
 /** e to `scale` fraction digits, rounded half-even. Σ 1/k!, cached per precision. */

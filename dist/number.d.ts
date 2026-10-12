@@ -8,7 +8,25 @@
 import type { RoundingMode } from './rounding.js';
 /** Interval notation: `[` / `]` include the bound, `(` / `)` exclude it. */
 export type Bounds = '[]' | '[)' | '(]' | '()';
-export declare function assertFinite(value: number, name: string): void;
+/**
+ * Numbers from `start` up to but excluding `end`, `step` apart (default 1):
+ * `range(5)` → `[0, 1, 2, 3, 4]`, `range(0, 1, 0.25)` → `[0, 0.25, 0.5, 0.75]`.
+ * A negative `step` counts down (`range(3, 0, -1)` → `[3, 2, 1]`). Each element
+ * is `start + i * step`, so fractional steps do not drift. A step pointing away
+ * from `end` gives `[]`. Throws `InvalidArgumentError` for a zero or non-finite
+ * step and `ResourceLimitError` past 10,000,000 elements.
+ */
+export declare function range(end: number): number[];
+export declare function range(start: number, end: number, step?: number): number[];
+/**
+ * `count` evenly spaced numbers from `start` to `end`, both included:
+ * `linspace(0, 1, 5)` → `[0, 0.25, 0.5, 0.75, 1]`. `count` 1 gives `[start]`,
+ * 0 gives `[]`. The first element is exactly `start` and the last exactly `end`;
+ * the span may exceed the float range (`linspace(-1e308, 1e308, 3)` works). Throws `InvalidArgumentError`
+ * unless `count` is a non-negative safe integer and `ResourceLimitError` past
+ * 10,000,000 elements.
+ */
+export declare function linspace(start: number, end: number, count: number): number[];
 /** Limits `x` to `[min, max]`, both ends included. */
 export declare function clamp(x: number, min: number, max: number): number;
 /** Linear interpolation. `t` outside `[0, 1]` extrapolates. Exact at both ends. */

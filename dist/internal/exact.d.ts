@@ -49,6 +49,8 @@ export declare class Decimal {
     toScale(scale: number, rounding?: RoundingMode): Decimal;
     /** `toScale` with the display-friendly default: half-up. `round(2)` on `1.005` gives `1.01`. */
     round(places?: number, rounding?: RoundingMode): Decimal;
+    /** Rounds to the nearest multiple of `step`: `decimal('1.23').roundTo('0.05')` → `1.25`. Default half-up. */
+    roundTo(step: DecimalInput, rounding?: RoundingMode): Decimal;
     /** Drops trailing zeros: `1.500` → `1.5`, `2.00` → `2`. */
     trim(): Decimal;
     compareTo(other: DecimalInput): -1 | 0 | 1;

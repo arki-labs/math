@@ -119,6 +119,14 @@ export class NumberValue {
             return this.toString();
         throw new TypeError('A NumberValue cannot be used as a number; call .value()');
     }
+    /** Console display in Node and Bun: `NumberValue(3)`. */
+    [Symbol.for('nodejs.util.inspect.custom')]() {
+        return `NumberValue(${this.toString()})`;
+    }
+    /** Console display in Deno. */
+    [Symbol.for('Deno.customInspect')]() {
+        return `NumberValue(${this.toString()})`;
+    }
     [Symbol.toStringTag] = 'NumberValue';
 }
 export function num(value) {

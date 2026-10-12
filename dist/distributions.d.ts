@@ -17,10 +17,8 @@ export type ContinuousDistribution = {
     sf(x: number): number;
     /**
      * Quantile: the x with cdf(x) = p, p in (0, 1), solved until |cdf(x) − p| ≤ 1e-12·max(p, 1 − p);
-     * p = 0 / 1 return the support bounds (±Infinity where unbounded). Short form of `quantile`.
+     * p = 0 / 1 return the support bounds (±Infinity where unbounded).
      */
-    inv(p: number): number;
-    /** Quantile function; identical to `inv`. */
     quantile(p: number): number;
     /** Expected value, or `undefined` when the distribution has none. */
     readonly mean: number | undefined;
@@ -37,11 +35,8 @@ export type DiscreteDistribution = {
     sf(k: number): number;
     /**
      * Quantile: exactly the smallest integer k with `cdf(k) >= p`, using this object's own `cdf`
-     * (no tolerance), so `inv(cdf(k)) === k`. p = 0 gives 0; p = 1 gives the support's upper bound.
-     * Short form of `quantile`.
+     * (no tolerance), so `quantile(cdf(k)) === k`. p = 0 gives 0; p = 1 gives the support's upper bound.
      */
-    inv(p: number): number;
-    /** Quantile function; identical to `inv`. */
     quantile(p: number): number;
     /** Expected value. */
     readonly mean: number;
@@ -79,7 +74,7 @@ export declare const MAX_NONCENTRALITY = 37.62;
  * 0 on the other side; elsewhere it uses the identity
  * f(x) = df/x · [F(x·√(1+2/df); df+2) − F(x; df)], where the cdf difference no
  * longer cancels (accurate to ~1e-15 absolute, so relative accuracy fades only
- * where the density itself is below ~1e-13). `inv` is the safeguarded Newton solver.
+ * where the density itself is below ~1e-13). `quantile` is the safeguarded Newton solver.
  * With `ncp = 0` it equals `studentT(df)`.
  */
 export declare function noncentralT(df: number, ncp: number): ContinuousDistribution;
