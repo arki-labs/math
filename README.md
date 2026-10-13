@@ -64,7 +64,6 @@ Everything is a subpath import, tree-shakeable by concern. The root
 | `@arki/math/number`        | `clamp`, `lerp`, `inverseLerp`, `remap`, `inRange`, `round`, `roundTo`, `approxEqual`, `range`, `linspace`                                  |
 | `@arki/math/integer`       | `gcd`, `lcm`, `divmod`, `factorial`, `combinations`, `permutations`, `isPrime`, `primeFactors`, `divisors`, `modPow`, `modInverse`, `fibonacci` |
 | `@arki/math/stats`         | `sum`, `mean`, `median`, `mode`, `percentile`, `variance`, `stddev`, `minMax`, `correlation`, `linearRegression`; `mean`…`stddev` exact on `Decimal[]` |
-| `@arki/math/money`         | `money()`, `Money` — currency-scaled `Decimal` with lossless `allocate`                                                                      |
 | `@arki/math/units`         | `convert`, `convertExact`, `formatUnit` — 11 categories, exact ratios                                                                        |
 | `@arki/math/finance`       | `payment`, `amortizationSchedule`, `futureValue`, `netPresentValue`, `internalRateOfReturn`, … — on `Decimal`                               |
 | `@arki/math/distributions` | `normal`, `studentT`, `noncentralT`, `chiSquare`, `fisherF`, `exponential`, `uniform`, `binomial`, `poisson`, `erf`, `erfInv`, `gammaLn`, … |
@@ -269,6 +268,7 @@ parseNumber('1.234,56', { locale: 'de-DE' }); // 1234.56
 parseNumber('1 234,56', { locale: 'fr-FR' }); // 1234.56
 parseNumber('−5', { locale: 'sv-SE' }); // -5   (U+2212 minus)
 parseDecimal('1,234.56').toString(); // '1234.56'
+parseNumber('1.234,56', { symbols: { decimal: ',', group: '.' } }); // 1234.56, no Intl needed
 parseNumber('abc'); // throws NumberFormatError
 ```
 
@@ -399,26 +399,9 @@ magnitude limit (`maxGroups`, in base-1000 groups) beyond which it throws
 
 ## Money
 
-A `Money` is a `Decimal` pinned to its currency's minor-unit scale (2 for
-EUR, 0 for JPY, 3 for BHD — read from `Intl`). Construction never loses
-cents silently: `money('1.005', 'EUR')` throws unless you pass a rounding
-mode. Multiplication and division round to the currency scale with
-banker's rounding by default; `allocate` splits an amount so the parts add
-back to the whole exactly, largest-remainder first.
-
-```ts
-import { money, Money } from '@arki/math/money';
-
-const price = money('19.99', 'EUR');
-price.times('1.19').toString(); // '23.79 EUR'
-price.dividedBy(3).toString(); // '6.66 EUR'   halfEven; { rounding: 'up' } → 6.67
-money(100, 'EUR').allocate([1, 1, 1]).map(String); // ['33.34 EUR', '33.33 EUR', '33.33 EUR']
-price.plus(money(1, 'USD')); // throws CurrencyMismatchError
-price.toMinorUnits(); // 1999n
-price.format({ locale: 'de-DE' }); // '19,99 €'
-Money.sum([price, price]).toString(); // '39.98 EUR'
-Money.parse('EUR 5').toJSON(); // { amount: '5.00', currency: 'EUR' }
-```
+Money lives in its own package, [`@arki/money`](../money/README.md). It builds on
+this one: same rounding modes, same error family, and it accepts `Decimal` and
+`Rational` as amounts.
 
 ## Units
 
@@ -499,17 +482,21 @@ try {
 | `EmptyDataError`          | a statistic of an empty (or too small) data set         |
 | `ResourceLimitError`      | more than 10 000 digits, or an exponent beyond ±10 000  |
 | `UnsupportedFeatureError` | the runtime's `Intl` lacks a feature the call relies on |
-| `CurrencyMismatchError`   | two `Money` values in different currencies were combined |
 
 ## Runtime support
 
 - **Node 22+, Bun, Deno, browsers**: everything, verified by the test suite
   and a smoke run of the built package in each runtime (`bun run test:runtimes`).
-- **React Native (Hermes)**: arithmetic, statistics, random and the float
-  helpers need only `bigint`. Formatting and parsing depend on the host's
-  `Intl` build; when a feature is missing (exact string formatting, a
-  non-default `roundingMode`), the call throws `UnsupportedFeatureError`
-  rather than silently degrading.
+- **React Native (Hermes V1)**: everything runs; `bun run test:runtimes`
+  checks it when `HERMES_BIN` points at a Hermes binary. Two `Intl` gaps
+  shape formatting and parsing:
+  - Hermes formats decimal text through a double. `Decimal` values are
+    rounded exactly first, so anything up to 15 shown digits (every normal
+    amount) prints exactly; more throws `UnsupportedFeatureError` instead of
+    printing a wrong digit. Compact notation accepts whole numbers only.
+  - Hermes on iOS has no `formatToParts`, so locale parsing throws
+    `UnsupportedFeatureError`; pass `symbols` to parse without `Intl`.
+  - A non-default `rounding` mode throws `UnsupportedFeatureError`.
 - Pure ESM, no runtime-specific globals; the lint config rejects any
   `node:*`/`bun:*` import or `process`/`Buffer` use in library code.
 

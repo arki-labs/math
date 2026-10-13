@@ -32,7 +32,4 @@ export declare class ResourceLimitError extends MathError {
 /** The runtime lacks an `Intl` feature this call depends on. */
 export declare class UnsupportedFeatureError extends MathError {
 }
-/** Two `Money` values in different currencies were combined. */
-export declare class CurrencyMismatchError extends MathError {
-}
 //# sourceMappingURL=errors.d.ts.map

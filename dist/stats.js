@@ -79,8 +79,8 @@ function noNegativeZero(value) {
 }
 /**
  * Validates every element and returns them as an array. An array input is
- * returned as-is (never mutated by this module — sorting goes through
- * `toSorted`), so the common case allocates nothing.
+ * returned as-is (never mutated by this module — sorting works on a copy),
+ * so the common case allocates nothing.
  */
 function toNumbers(values, name) {
     const out = Array.isArray(values) ? values : [...values];
@@ -134,7 +134,7 @@ function interpolate(low, high, fraction) {
     return Number.isFinite(span) ? low + span * fraction : low * (1 - fraction) + high * fraction;
 }
 function sortedCopy(values) {
-    return values.toSorted((a, b) => a - b);
+    return [...values].sort((a, b) => a - b);
 }
 function pairs(x, y) {
     const xs = toNumbers(x, 'x');
@@ -322,7 +322,7 @@ export function mean(values, options) {
 export function median(values) {
     const items = materialize(values);
     if (isDecimal(items[0])) {
-        const ordered = decimalsFrom(items).toSorted((a, b) => a.compareTo(b));
+        const ordered = [...decimalsFrom(items)].sort((a, b) => a.compareTo(b));
         const middle = ordered.length >> 1;
         return ordered.length % 2 === 1 ? ordered[middle] : ordered[middle - 1].plus(ordered[middle]).dividedBy(2);
     }
@@ -348,7 +348,7 @@ export function mode(values) {
     for (const [value, count] of counts)
         if (count === best)
             result.push(value);
-    return result.toSorted((a, b) => a - b);
+    return result.sort((a, b) => a - b);
 }
 /**
  * The `p`-th percentile, `p` in `[0, 100]`, by linear interpolation between

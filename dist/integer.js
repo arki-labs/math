@@ -400,7 +400,7 @@ function divisorsBigInt(n) {
         result = next;
         i = j;
     }
-    return result.toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    return result.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 /** True when `n` is divisible by 2. Zero is even. */
 export function isEven(n) {

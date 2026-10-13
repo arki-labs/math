@@ -11,11 +11,26 @@
  * The locale decides what the separators mean: `'1.234'` is 1.234 in `en-US`
  * but 1234 in `de-DE`. Group separators are only removed, never validated, so
  * `'1,23,4'` is accepted in `en-US` and reads as 1234.
+ *
+ * Runtimes without `Intl.NumberFormat#formatToParts` (React Native's Hermes on
+ * iOS) throw `UnsupportedFeatureError`; pass `symbols` to parse without `Intl`.
  */
 import type { Decimal } from './decimal.js';
 export type ParseOptions = {
-    /** BCP 47 locale tag. Default `'en-US'`. */
+    /** BCP 47 locale tag. Default `'en-US'`. Ignored when `symbols` is given. */
     locale?: string;
+    /**
+     * The separators to read, instead of asking `Intl` for the locale's:
+     * `{ decimal: ',', group: '.' }`. Minus defaults to `'-'`, digits to ASCII.
+     */
+    symbols?: ParseSymbols;
+};
+export type ParseSymbols = {
+    decimal: string;
+    group: string;
+    minusSign?: string;
+    /** The ten digits `0` to `9`. Default ASCII. */
+    digits?: readonly string[];
 };
 export type LocaleNumberSymbols = {
     decimal: string;
