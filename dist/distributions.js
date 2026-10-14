@@ -361,8 +361,17 @@ function acklam(p) {
     const r = q * q;
     return (poly(ACKLAM_A, r) * q) / (poly(ACKLAM_B, r) * r + 1);
 }
-/** Standard normal quantile: Acklam's guess, then two Halley steps on erfc. */
+/**
+ * Standard normal quantile. In the middle, √2·erfInv(2p − 1): 2p − 1 is exact
+ * there and erfInv keeps its relative accuracy even where the quantile is
+ * tiny. In the tails, Acklam's guess and two Halley steps on erfc, taken in the
+ * lower tail (the upper one by symmetry, as 1 − p is exact above ½).
+ */
 function normalQuantile(p) {
+    if (p >= 0.25 && p <= 0.75)
+        return SQRT2 * erfInv(2 * p - 1);
+    if (p > 0.5)
+        return -normalQuantile(1 - p);
     let x = acklam(p);
     for (let i = 0; i < 2; i++) {
         const e = 0.5 * erfcRaw(-x / SQRT2) - p;
@@ -419,20 +428,26 @@ function nextFactor(factor) {
     return Math.min(factor * factor, 2 ** 64);
 }
 /**
- * Inverts a monotone cdf. First brackets the quantile, growing the bracket by
- * squaring factors so tails many orders of magnitude out are reached in a few
- * steps. Then runs Newton steps (when a pdf is given) safeguarded by bisection
- * — geometric when the bracket spans orders of magnitude, and stepping toward a
- * support bound of 0 by squaring factors — until |cdf(x) − p| ≤ 1e-12·max(p, 1 − p),
- * which is meaningful however small the quantile is. If the bracket shrinks to
- * adjacent doubles first, the endpoint with the smaller error is returned.
- * Throws `NumericRangeError` if the iteration cap is hit.
+ * Inverts a monotone distribution on its accurate side: for p ≤ ½ it solves
+ * cdf(x) = p, above it sf(x) = 1 − p (exact in floating point there), each to
+ * 1e-12 of that tail probability, so a quantile far out in either tail is as
+ * accurate as one near the middle. First brackets the quantile, growing the
+ * bracket by squaring factors so tails many orders of magnitude out are reached
+ * in a few steps. Then runs Newton steps (when a pdf is given) safeguarded by
+ * bisection — geometric when the bracket spans orders of magnitude, and
+ * stepping toward a support bound of 0 by squaring factors. If the bracket
+ * shrinks to adjacent doubles first, the endpoint with the smaller error is
+ * returned. Throws `NumericRangeError` if the iteration cap is hit.
  */
-function invertCdf(cdf, p, bracket, pdf) {
+function invertCdf(cdf, sf, p, bracket, pdf) {
+    const lowerTail = p <= 0.5;
+    const q = 1 - p;
+    // Increasing in x and zero at the quantile; its derivative is the pdf either way.
+    const residual = lowerTail ? (x) => cdf(x) - p : (x) => q - sf(x);
     let { lo, hi } = bracket;
     let factor = 2;
     if (!bracket.loFixed) {
-        while (cdf(lo) > p) {
+        while (residual(lo) > 0) {
             if (lo === -Number.MAX_VALUE)
                 throw outOfRange();
             hi = lo;
@@ -441,20 +456,20 @@ function invertCdf(cdf, p, bracket, pdf) {
         }
     }
     factor = 2;
-    while (cdf(hi) < p) {
+    while (residual(hi) < 0) {
         if (hi === Number.MAX_VALUE)
             throw outOfRange();
         lo = hi;
         hi = Math.min(hi * factor, Number.MAX_VALUE);
         factor = nextFactor(factor);
     }
-    const tolerance = QUANTILE_TOLERANCE * Math.max(p, 1 - p);
+    const tolerance = QUANTILE_TOLERANCE * (lowerTail ? p : q);
     // While lo is still the support bound 0, bisection steps toward it by squaring factors.
     let zeroFactor = 2;
     let x = bisectionPoint(lo, hi, zeroFactor);
     let previousError = Infinity;
     for (let i = 0; i < QUANTILE_MAX_ITER; i++) {
-        const f = cdf(x) - p;
+        const f = residual(x);
         const error = Math.abs(f);
         if (error <= tolerance)
             return x;
@@ -479,12 +494,12 @@ function invertCdf(cdf, p, bracket, pdf) {
             next = bisectionPoint(lo, hi, zeroFactor);
             if (!(next > lo && next < hi)) {
                 // lo and hi are adjacent doubles: no representable x does better.
-                return Math.abs(cdf(lo) - p) <= Math.abs(cdf(hi) - p) ? lo : hi;
+                return Math.abs(residual(lo)) <= Math.abs(residual(hi)) ? lo : hi;
             }
         }
         x = next;
     }
-    throw new NumericRangeError(`quantile did not converge to |cdf(x) - p| <= ${tolerance} within ${QUANTILE_MAX_ITER} iterations (p = ${p})`);
+    throw new NumericRangeError(`quantile did not converge to within ${tolerance} of the ${lowerTail ? 'lower' : 'upper'} tail probability in ${QUANTILE_MAX_ITER} iterations (p = ${p})`);
 }
 function solveQuantile(p, lower, upper, solve) {
     assertProbability(p);
@@ -550,7 +565,7 @@ export function studentT(df) {
     const lnNorm = studentTLnNorm(df);
     const cdf = (x) => studentTCdf(x, df, lnB);
     const pdf = (x) => studentTPdf(x, df, lnNorm);
-    const quantile = (p) => solveQuantile(p, -Infinity, Infinity, () => p === 0.5 ? 0 : invertCdf(cdf, p, { lo: -1, hi: 1, loFixed: false }, pdf));
+    const quantile = (p) => solveQuantile(p, -Infinity, Infinity, () => p === 0.5 ? 0 : invertCdf(cdf, x => cdf(-x), p, { lo: -1, hi: 1, loFixed: false }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -744,7 +759,7 @@ export function noncentralT(df, ncp) {
             return nctPdfSeries(x, df, lnC, gammaRatio, z);
         return Math.max(0, (df / x) * (nctCdfFrom(kernelPlus2, x * stretch) - cdf(x)));
     };
-    const quantile = (p) => solveQuantile(p, -Infinity, Infinity, () => invertCdf(cdf, p, { lo: -1, hi: 1, loFixed: false }, pdf));
+    const quantile = (p) => solveQuantile(p, -Infinity, Infinity, () => invertCdf(cdf, x => nctSfFrom(kernel, x), p, { lo: -1, hi: 1, loFixed: false }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -776,6 +791,13 @@ export function chiSquare(df) {
             return 1;
         return gammaPQ(k, x / 2, gln).p;
     };
+    const sf = (x) => {
+        if (x <= 0)
+            return 1;
+        if (x === Infinity)
+            return 0;
+        return gammaPQ(k, x / 2, gln).q;
+    };
     const pdf = (x) => {
         if (x < 0 || x === Infinity)
             return 0;
@@ -783,7 +805,7 @@ export function chiSquare(df) {
             return df < 2 ? Infinity : df === 2 ? 0.5 : 0;
         return Math.exp((k - 1) * Math.log(x) - x / 2 - lnNorm);
     };
-    const quantile = (p) => solveQuantile(p, 0, Infinity, () => invertCdf(cdf, p, { lo: 0, hi: Math.max(1, df), loFixed: true }, pdf));
+    const quantile = (p) => solveQuantile(p, 0, Infinity, () => invertCdf(cdf, sf, p, { lo: 0, hi: Math.max(1, df), loFixed: true }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -795,11 +817,7 @@ export function chiSquare(df) {
         },
         sf(x) {
             assertPoint(x, 'x');
-            if (x <= 0)
-                return 1;
-            if (x === Infinity)
-                return 0;
-            return noNegativeZero(gammaPQ(k, x / 2, gln).q);
+            return noNegativeZero(sf(x));
         },
         quantile,
         mean: df,
@@ -822,6 +840,15 @@ export function fisherF(df1, df2) {
         const d = df1 * x + df2;
         return betaI((df1 * x) / d, df2 / d, a, b, lnB);
     };
+    const sf = (x) => {
+        if (x <= 0)
+            return 1;
+        if (x === Infinity)
+            return 0;
+        const d = df1 * x + df2;
+        // 1 − I_u(a, b) = I_{1−u}(b, a), evaluated on its own accurate side.
+        return betaI(df2 / d, (df1 * x) / d, b, a, lnB);
+    };
     const pdf = (x) => {
         if (x < 0 || x === Infinity)
             return 0;
@@ -830,7 +857,7 @@ export function fisherF(df1, df2) {
         const lnNum = 0.5 * (df1 * Math.log(df1 * x) - (df1 + df2) * Math.log(df1 * x + df2));
         return Math.exp(lnNum + lnPdfConst - Math.log(x));
     };
-    const quantile = (p) => solveQuantile(p, 0, Infinity, () => invertCdf(cdf, p, { lo: 0, hi: 1, loFixed: true }, pdf));
+    const quantile = (p) => solveQuantile(p, 0, Infinity, () => invertCdf(cdf, sf, p, { lo: 0, hi: 1, loFixed: true }, pdf));
     return {
         pdf(x) {
             assertPoint(x, 'x');
@@ -842,13 +869,7 @@ export function fisherF(df1, df2) {
         },
         sf(x) {
             assertPoint(x, 'x');
-            if (x <= 0)
-                return 1;
-            if (x === Infinity)
-                return 0;
-            const d = df1 * x + df2;
-            // 1 − I_u(a, b) = I_{1−u}(b, a), evaluated on its own accurate side.
-            return noNegativeZero(betaI(df2 / d, (df1 * x) / d, b, a, lnB));
+            return noNegativeZero(sf(x));
         },
         quantile,
         mean: df2 > 2 ? df2 / (df2 - 2) : undefined,

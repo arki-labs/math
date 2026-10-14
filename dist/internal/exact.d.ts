@@ -11,10 +11,15 @@ export type DecimalInput = Decimal | string | number | bigint;
 export type RationalInput = Rational | DecimalInput;
 export type IntegerInput = string | number | bigint;
 /**
- * An exact finite decimal: `coefficient × 10^-scale`. Immutable. The scale
- * is retained, so `'1.10'` stays `1.10` and `'1.10' × 3` is `3.30` — what a
+ * An exact finite decimal: `coefficient × 10^-scale`. The scale is retained,
+ * so `'1.10'` stays `1.10` and `'1.10' × 3` is `3.30` — what a
  * person expects from money and measurements. Equality is numeric:
  * `decimal('1.0').eq('1.00')` is `true`.
+ *
+ * Immutable: methods never modify their operands and the fields are `readonly`.
+ * Instances are not frozen — `Object.freeze` per result cost 5–7× in hot loops,
+ * and no peer library (decimal.js, big.js, fraction.js, complex.js) freezes —
+ * but the shared constants arithmetic can return are frozen.
  */
 export declare class Decimal {
     readonly coefficient: bigint;
@@ -93,8 +98,13 @@ export type MixedNumber = {
 };
 /**
  * An exact fraction of two bigints, always reduced, denominator always
- * positive, zero always `0/1`. Immutable. Where `Decimal` must throw
- * (`1 ÷ 3`), a `Rational` just keeps going.
+ * positive, zero always `0/1`. Where `Decimal` must throw (`1 ÷ 3`), a
+ * `Rational` just keeps going.
+ *
+ * Immutable: methods never modify their operands and the fields are `readonly`.
+ * Instances are not frozen — `Object.freeze` per result cost 5–7× in hot loops,
+ * and no peer library (decimal.js, big.js, fraction.js, complex.js) freezes —
+ * but the shared constants arithmetic can return are frozen.
  */
 export declare class Rational {
     readonly numerator: bigint;
@@ -108,6 +118,7 @@ export declare class Rational {
     minus(other: RationalInput): Rational;
     /** Cross-cancels before multiplying, so the products never carry common factors. */
     times(other: RationalInput): Rational;
+    /** Cross-cancels like `times`, so the result is reduced before its size is checked. */
     dividedBy(other: RationalInput): Rational;
     /** Integer exponent; negative exponents invert. */
     pow(exponent: number): Rational;

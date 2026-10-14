@@ -38,4 +38,7 @@ export declare class SingularMatrixError extends MathError {
 /** An iterative method did not reach its tolerance within its iteration limit. */
 export declare class ConvergenceError extends MathError {
 }
+/** A matrix that must be symmetric positive definite (for a Cholesky factorization) is not. */
+export declare class NotPositiveDefiniteError extends MathError {
+}
 //# sourceMappingURL=errors.d.ts.map

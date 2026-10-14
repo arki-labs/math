@@ -16,8 +16,10 @@ export type ContinuousDistribution = {
     /** Survival function P(X > x) = 1 − cdf(x), computed on the accurate side where the distribution allows. */
     sf(x: number): number;
     /**
-     * Quantile: the x with cdf(x) = p, p in (0, 1), solved until |cdf(x) − p| ≤ 1e-12·max(p, 1 − p);
-     * p = 0 / 1 return the support bounds (±Infinity where unbounded).
+     * Quantile: the x with cdf(x) = p, p in (0, 1), solved on the accurate side to 1e-12 of the
+     * smaller tail (|cdf(x) − p| ≤ 1e-12·p for p ≤ ½, |sf(x) − (1 − p)| ≤ 1e-12·(1 − p) above), so
+     * far-tail quantiles keep their relative accuracy; p = 0 / 1 return the support bounds
+     * (±Infinity where unbounded).
      */
     quantile(p: number): number;
     /** Expected value, or `undefined` when the distribution has none. */

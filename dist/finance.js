@@ -30,9 +30,12 @@
  * re-exported from the float layer. `periodsToReach` with `{ payment }` is
  * Excel `NPER`.
  */
-import { nthRoot } from './decimal-math.js';
 import { Decimal } from './decimal.js';
 import { InvalidArgumentError, ResourceLimitError } from './errors.js';
+import { digitCount, divideRounded, pow10 } from './internal/bigint.js';
+import { assertScale } from './internal/fraction.js';
+import { assertDigitLimit } from './internal/limits.js';
+import { rootAt } from './internal/roots.js';
 import { assertFinite } from './number.js';
 import { ratio } from './rational.js';
 export { internalRateOfReturn, periodsToReach } from './finance-float.js';
@@ -40,7 +43,7 @@ export { internalRateOfReturn, periodsToReach } from './finance-float.js';
 const GUARD_DIGITS = 10;
 /** Most rows `amortizationSchedule` builds; more throws `ResourceLimitError`. */
 const MAX_SCHEDULE_PERIODS = 100_000;
-const ONE = Decimal.from(1);
+const ONE = Object.freeze(Decimal.from(1));
 function resolveRounding(options) {
     return options.rounding ?? 'halfEven';
 }
@@ -234,12 +237,16 @@ export function effectiveRate(nominalRate, periodsPerYear, options) {
  */
 export function nominalRate(effectiveRate, periodsPerYear, options) {
     assertPeriodsPerYear(periodsPerYear);
-    const factor = growthFactor(effectiveRate);
-    const root = nthRoot(factor, periodsPerYear, {
-        scale: options.scale + GUARD_DIGITS + String(periodsPerYear).length,
-        rounding: 'down',
-    });
-    return root.minus(1).times(periodsPerYear).toScale(options.scale, resolveRounding(options));
+    assertScale(options.scale);
+    const factor = growthFactor(effectiveRate).trim();
+    // The guard-digit root stays a fixed-point bigint, an exact intermediate: only the
+    // returned rate counts against the 10 000-digit result cap.
+    const precision = options.scale + GUARD_DIGITS + String(periodsPerYear).length;
+    const { root } = rootAt(factor.coefficient, factor.scale, periodsPerYear, precision);
+    const rate = (root - pow10(precision)) * BigInt(periodsPerYear);
+    const coefficient = divideRounded(rate, pow10(precision - options.scale), resolveRounding(options));
+    assertDigitLimit(digitCount(coefficient), 'nominalRate');
+    return Decimal.fromParts({ coefficient, scale: options.scale });
 }
 /**
  * Interest earned only: `futureValue − principal`. Exact; with `{ scale }` it

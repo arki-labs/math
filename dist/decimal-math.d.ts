@@ -20,9 +20,14 @@
  *   are detected exactly, so `rounding: 'unnecessary'` returns them and
  *   throws `RoundingNecessaryError` for everything else.
  *
- * Practical limits: `scale` is at most 10 000, and a result may have at most
- * 10 000 digits in total (`exp(100000, { scale: 10 })` throws
- * `ResourceLimitError`). Cost grows faster than linearly with `scale`: about
+ * Limits: a result obeys the same cap as every `Decimal` — at most 10 000
+ * digits in its coefficient, counting integer digits and the `scale` fraction
+ * digits (leading zeros of a value below 1 do not count). So `scale` can reach
+ * 10 000 only for results below 1: `exp(-1, { scale: 10000 })` works,
+ * `exp(1, { scale: 10000 })` and `PI(10000)` (10 001 digits) throw
+ * `ResourceLimitError`, as does `exp(100000, { scale: 10 })`. The guard digits
+ * used inside never count against the cap, and a result that surely breaks it
+ * is refused before any work. Cost grows faster than linearly with `scale`: about
  * a millisecond at 50 digits, about 10 ms at 1 000, and a few seconds for a
  * logarithm at 10 000.
  */
@@ -82,14 +87,16 @@ export declare function log2(value: DecimalInput, options: ScaleOptions): Decima
  * `base` raised to `exponent`.
  *
  * - Integer exponent: exact, through `Decimal#pow` (`pow(2, 10)` → `1024`,
- *   `0^0` → `1`). With options the exact result is rounded to `scale`; a
- *   negative exponent then divides with rounding (`pow(3, -1, { scale: 3 })`
- *   → `0.333`) instead of throwing.
+ *   `0^0` → `1`). With options the result is correctly rounded to `scale`
+ *   and the exact power is only an intermediate: a negative exponent divides
+ *   with rounding (`pow(3, -1, { scale: 3 })` → `0.333`) instead of throwing,
+ *   and `pow('0.5', 20000, { scale: 10 })` → `0.0000000000`. Exponents of any
+ *   size work (`pow(1, '1e9999', { scale: 2 })` → `1.00`).
  * - Non-integer exponent: requires options (`InvalidArgumentError` otherwise)
  *   and a base ≥ 0 (`InvalidArgumentError` for negative bases); computed as
  *   exp(exponent · ln(base)) and correctly rounded. `0^positive` is 0. Exact
  *   cases are detected: `pow(4, '0.5', { scale: 2 })` → `2.00`.
- * - Results over 10 000 digits throw `ResourceLimitError`.
+ * - Results over 10 000 digits throw `ResourceLimitError` (see the module doc).
  */
 export declare function pow(base: DecimalInput, exponent: DecimalInput, options?: ScaleOptions): Decimal;
 /** π to `scale` fraction digits, rounded half-even. Machin's formula, cached per precision. */

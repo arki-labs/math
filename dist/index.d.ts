@@ -19,4 +19,7 @@ export * from './finance.js';
 export * from './geometry.js';
 export * from './complex.js';
 export * from './polynomial.js';
+export * from './roots.js';
+export * from './integrate.js';
+export * from './differentiate.js';
 //# sourceMappingURL=index.d.ts.map

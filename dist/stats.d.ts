@@ -29,12 +29,12 @@ export type MinMax = {
  * `undefined` for exactly two points, where no residual freedom is left.
  */
 export type LinearFit = Fit & FitDiagnostics & {
-    slope: number;
-    intercept: number;
+    readonly slope: number;
+    readonly intercept: number;
     /** Standard error of the slope: `residualStandardError / sqrt(sum((x - mean x)^2))`. */
-    slopeStandardError: number | undefined;
+    readonly slopeStandardError: number | undefined;
     /** Standard error of the intercept: `residualStandardError * sqrt(1/n + mean(x)^2 / sum((x - mean x)^2))`. */
-    interceptStandardError: number | undefined;
+    readonly interceptStandardError: number | undefined;
 };
 /**
  * Hyndman & Fan's nine sample-quantile definitions (Amer. Statistician 50(4), 1996),
@@ -148,10 +148,23 @@ export type ProportionSampleSizeInput = {
     level?: number;
     stddev?: never;
 };
-/** A fitted curve: its fit quality and a function to evaluate it. */
+/**
+ * A fitted curve: its fit quality and a function to evaluate it.
+ *
+ * The coefficients and `predict` are computed by the fit itself. In the
+ * exponential, logarithmic, power and polynomial fits, `r2` and the other
+ * diagnostics are measured on first read: reading any one of them measures
+ * them all, once, with the same arithmetic and the same result as an eager
+ * fit. They are enumerable own getters, so `JSON.stringify(fit)`, `{ ...fit }`
+ * and `Object.keys(fit)` show them as plain values. Until that first read the
+ * fit holds its own copy of the data (never the caller's arrays, which may
+ * change after the call returns); it drops the copy once the diagnostics are
+ * measured. `linearRegression` measures its diagnostics during the call: its
+ * residual pass costs less than the copy of the data a later pass would need.
+ */
 type Fit = {
     /** Coefficient of determination `1 - SSres / SStot`, measured on the original y values. */
-    r2: number;
+    readonly r2: number;
     predict(x: number): number;
 };
 /**
@@ -161,31 +174,31 @@ type Fit = {
  */
 type FitDiagnostics = {
     /** `1 - (1 - r2) * (n - 1) / (n - k - 1)`: r2 penalised for the number of predictors. */
-    adjustedR2: number | undefined;
+    readonly adjustedR2: number | undefined;
     /** Standard error of the estimate (R's "residual standard error", Excel `STEYX`): `sqrt(SSres / (n - k - 1))`. */
-    residualStandardError: number | undefined;
+    readonly residualStandardError: number | undefined;
 };
 /** `y = a * e^(b * x)`. */
 export type ExponentialFit = Fit & {
-    a: number;
-    b: number;
+    readonly a: number;
+    readonly b: number;
 };
 /** `y = a + b * ln(x)`. */
 export type LogarithmicFit = Fit & {
-    a: number;
-    b: number;
+    readonly a: number;
+    readonly b: number;
 };
 /** `y = a * x^b`. */
 export type PowerFit = Fit & {
-    a: number;
-    b: number;
+    readonly a: number;
+    readonly b: number;
 };
 /**
  * `y = c[0] + c[1] * x + c[2] * x^2 + ...`, lowest degree first. Diagnostics use
  * k = degree predictors, so n - degree - 1 residual degrees of freedom.
  */
 export type PolynomialFit = Fit & FitDiagnostics & {
-    coefficients: readonly number[];
+    readonly coefficients: readonly number[];
 };
 /**
  * Total of the values using Neumaier compensated summation. An empty input
@@ -355,7 +368,9 @@ export declare function logarithmicRegression(x: Iterable<number>, y: Iterable<n
  */
 export declare function powerRegression(x: Iterable<number>, y: Iterable<number>): PowerFit;
 /**
- * Least-squares polynomial of the given `degree`, by the normal equations.
+ * Least-squares polynomial of the given `degree`, by Householder QR with
+ * column pivoting on the Vandermonde matrix (never the normal equations, which
+ * square its condition number; NumPy's `polyfit` uses an SVD to the same end).
  * Coefficients are lowest degree first (`[c0, c1, ...]`); `r2` is measured on
  * the original y.
  *
@@ -369,8 +384,10 @@ export declare function powerRegression(x: Iterable<number>, y: Iterable<number>
  * lose digits that `predict` keeps.
  *
  * Throws `InvalidArgumentError` for a non-integer or negative degree, or fewer
- * distinct x values than `degree + 1`, and `NumericRangeError` when the system
- * is numerically singular.
+ * distinct x values than `degree + 1`, and `NumericRangeError` when the
+ * Vandermonde matrix is rank-deficient to working precision: some `|r_kk|` of
+ * its column-normalized QR is at or below `n · Number.EPSILON · |r₀₀|` (`n`
+ * points), the rank rule of NumPy's `polyfit`, where NumPy warns.
  */
 export declare function polynomialRegression(x: Iterable<number>, y: Iterable<number>, degree: number): PolynomialFit;
 export {};

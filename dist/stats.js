@@ -18,6 +18,7 @@ import { normal, studentT } from './distributions.js';
 import { EmptyDataError, InvalidArgumentError, NumericRangeError, RoundingNecessaryError } from './errors.js';
 import { divideRounded, pow10 } from './internal/bigint.js';
 import { assertScale } from './internal/fraction.js';
+import { applyQTranspose, backSubstitute, householderQr } from './internal/householder.js';
 import { assertFinite } from './number.js';
 /**
  * Hyndman & Fan's nine sample-quantile definitions (Amer. Statistician 50(4), 1996),
@@ -145,44 +146,66 @@ function elementError(value, at) {
 /**
  * Compensated sum of number elements, or a non-finite value when an element
  * is not finite or the sum overflows (a non-finite element makes the running
- * total non-finite for good, so no per-element check is needed). Two
+ * total non-finite for good, so no per-element check is needed). Four
  * interleaved streams each keep the exact error of every addition (Knuth's
- * TwoSum) and are merged exactly at the end: as accurate as one Neumaier
- * pass, with two independent dependency chains instead of one.
+ * TwoSum), and the stream totals are merged with TwoSum too, keeping those
+ * errors: as accurate as one Neumaier pass, with four independent dependency
+ * chains instead of one.
  */
 function pairedSum(items, name) {
     let total0 = 0;
     let error0 = 0;
     let total1 = 0;
     let error1 = 0;
+    let total2 = 0;
+    let error2 = 0;
+    let total3 = 0;
+    let error3 = 0;
     const length = items.length;
     let i = 0;
-    for (; i + 1 < length; i += 2) {
+    for (; i + 3 < length; i += 4) {
         const a = items[i];
         const b = items[i + 1];
-        if (typeof a !== 'number' || typeof b !== 'number')
+        const c = items[i + 2];
+        const d = items[i + 3];
+        if (typeof a !== 'number' || typeof b !== 'number' || typeof c !== 'number' || typeof d !== 'number') {
             throw invalidElement(items, name);
-        const next0 = total0 + a;
-        const part0 = next0 - total0;
-        error0 += total0 - (next0 - part0) + (a - part0);
-        total0 = next0;
-        const next1 = total1 + b;
-        const part1 = next1 - total1;
-        error1 += total1 - (next1 - part1) + (b - part1);
-        total1 = next1;
+        }
+        let next = total0 + a;
+        let part = next - total0;
+        error0 += total0 - (next - part) + (a - part);
+        total0 = next;
+        next = total1 + b;
+        part = next - total1;
+        error1 += total1 - (next - part) + (b - part);
+        total1 = next;
+        next = total2 + c;
+        part = next - total2;
+        error2 += total2 - (next - part) + (c - part);
+        total2 = next;
+        next = total3 + d;
+        part = next - total3;
+        error3 += total3 - (next - part) + (d - part);
+        total3 = next;
     }
-    if (i < length) {
+    for (; i < length; i++) {
         const a = items[i];
         if (typeof a !== 'number')
             throw invalidElement(items, name);
-        const next0 = total0 + a;
-        const part0 = next0 - total0;
-        error0 += total0 - (next0 - part0) + (a - part0);
-        total0 = next0;
+        const next = total0 + a;
+        const part = next - total0;
+        error0 += total0 - (next - part) + (a - part);
+        total0 = next;
     }
-    const total = total0 + total1;
-    const part = total - total0;
-    return total + (error0 + error1 + (total0 - (total - part)) + (total1 - part));
+    const low = total0 + total1;
+    let part = low - total0;
+    const lowError = total0 - (low - part) + (total1 - part);
+    const high = total2 + total3;
+    part = high - total2;
+    const highError = total2 - (high - part) + (total3 - part);
+    const total = low + high;
+    part = total - low;
+    return total + (error0 + error1 + error2 + error3 + lowError + highError + (low - (total - part)) + (high - part));
 }
 /**
  * Compensated sum of the elements, each checked to be a finite number
@@ -303,24 +326,14 @@ function pairs(x, y) {
 function centeredSums(xs, ys) {
     const meanX = meanOf(xs);
     const meanY = meanOf(ys);
+    const plain = centeredAround(xs, ys, meanX, meanY);
+    if (plain !== undefined)
+        return plain;
+    const kx = xs.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
+    const ky = ys.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
     let sxx = 0;
     let syy = 0;
     let sxy = 0;
-    for (const [i, x] of xs.entries()) {
-        const dx = x - meanX;
-        const dy = (ys[i] ?? 0) - meanY;
-        sxx += dx * dx;
-        syy += dy * dy;
-        sxy += dx * dy;
-    }
-    if (Number.isFinite(sxx) && Number.isFinite(syy) && Number.isFinite(sxy)) {
-        return { sxx, syy, sxy, meanX, meanY, kx: 1, ky: 1 };
-    }
-    const kx = xs.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
-    const ky = ys.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
-    sxx = 0;
-    syy = 0;
-    sxy = 0;
     for (const [i, x] of xs.entries()) {
         const dx = x / kx - meanX / kx;
         const dy = (ys[i] ?? 0) / ky - meanY / ky;
@@ -329,6 +342,119 @@ function centeredSums(xs, ys) {
         sxy += dx * dy;
     }
     return { sxx, syy, sxy, meanX, meanY, kx, ky };
+}
+/**
+ * Centered sums around the given means, in y's and x's own units, or
+ * `undefined` when one overflows. Even and odd indices go to separate
+ * accumulators (two independent chains, and an error bound of about n/2
+ * roundings instead of n - 1), added together at the end.
+ */
+function centeredAround(xs, ys, meanX, meanY) {
+    let sxx0 = 0;
+    let syy0 = 0;
+    let sxy0 = 0;
+    let sxx1 = 0;
+    let syy1 = 0;
+    let sxy1 = 0;
+    const n = xs.length;
+    let i = 0;
+    for (; i + 1 < n; i += 2) {
+        const dx0 = xs[i] - meanX;
+        const dy0 = ys[i] - meanY;
+        const dx1 = xs[i + 1] - meanX;
+        const dy1 = ys[i + 1] - meanY;
+        sxx0 += dx0 * dx0;
+        syy0 += dy0 * dy0;
+        sxy0 += dx0 * dy0;
+        sxx1 += dx1 * dx1;
+        syy1 += dy1 * dy1;
+        sxy1 += dx1 * dy1;
+    }
+    if (i < n) {
+        const dx0 = xs[i] - meanX;
+        const dy0 = ys[i] - meanY;
+        sxx0 += dx0 * dx0;
+        syy0 += dy0 * dy0;
+        sxy0 += dx0 * dy0;
+    }
+    const sxx = sxx0 + sxx1;
+    const syy = syy0 + syy1;
+    const sxy = sxy0 + sxy1;
+    if (!Number.isFinite(sxx) || !Number.isFinite(syy) || !Number.isFinite(sxy))
+        return undefined;
+    return { sxx, syy, sxy, meanX, meanY, kx: 1, ky: 1 };
+}
+/**
+ * `meanOf(xs)`, `meanOf(ys)` and `centeredSums(xs, ys)` for two arrays in two
+ * indexed passes, with the same arithmetic in the same order, so the results
+ * are bit-identical to the general path. The first pass checks the element types and forms both
+ * compensated sums the way `pairedSum` does. Returns `undefined` when the
+ * lengths differ, there are fewer than 2 points, an element is not a finite
+ * number (it makes a sum non-finite), or a sum overflows: the general path then
+ * throws the same error it always did, or rescales.
+ */
+function arrayCenteredSums(xs, ys) {
+    const n = xs.length;
+    if (ys.length !== n || n < 2)
+        return undefined;
+    let x0 = 0;
+    let xError0 = 0;
+    let x1 = 0;
+    let xError1 = 0;
+    let y0 = 0;
+    let yError0 = 0;
+    let y1 = 0;
+    let yError1 = 0;
+    let i = 0;
+    for (; i + 1 < n; i += 2) {
+        const xa = xs[i];
+        const xb = xs[i + 1];
+        const ya = ys[i];
+        const yb = ys[i + 1];
+        if (typeof xa !== 'number' || typeof xb !== 'number' || typeof ya !== 'number' || typeof yb !== 'number') {
+            return undefined;
+        }
+        let next = x0 + xa;
+        let part = next - x0;
+        xError0 += x0 - (next - part) + (xa - part);
+        x0 = next;
+        next = x1 + xb;
+        part = next - x1;
+        xError1 += x1 - (next - part) + (xb - part);
+        x1 = next;
+        next = y0 + ya;
+        part = next - y0;
+        yError0 += y0 - (next - part) + (ya - part);
+        y0 = next;
+        next = y1 + yb;
+        part = next - y1;
+        yError1 += y1 - (next - part) + (yb - part);
+        y1 = next;
+    }
+    if (i < n) {
+        const xa = xs[i];
+        const ya = ys[i];
+        if (typeof xa !== 'number' || typeof ya !== 'number')
+            return undefined;
+        let next = x0 + xa;
+        let part = next - x0;
+        xError0 += x0 - (next - part) + (xa - part);
+        x0 = next;
+        next = y0 + ya;
+        part = next - y0;
+        yError0 += y0 - (next - part) + (ya - part);
+        y0 = next;
+    }
+    let total = x0 + x1;
+    let part = total - x0;
+    const sumX = total + (xError0 + xError1 + (x0 - (total - part)) + (x1 - part));
+    total = y0 + y1;
+    part = total - y0;
+    const sumY = total + (yError0 + yError1 + (y0 - (total - part)) + (y1 - part));
+    if (!Number.isFinite(sumX) || !Number.isFinite(sumY))
+        return undefined;
+    // Every element is now known to be a finite number.
+    return centeredAround(xs, ys, sumX / n, sumY / n);
 }
 /** Exact total and count of `Decimal` values in one pass, at the running largest scale; rejects numbers. */
 function decimalTotal(values) {
@@ -873,15 +999,29 @@ export function correlation(x, y) {
  * or when x is constant (the slope is undefined).
  */
 export function linearRegression(x, y) {
-    const { xs, ys } = pairs(x, y);
-    const { sxx, sxy, meanX, meanY, kx, ky } = centeredSums(xs, ys);
-    if (sxx === 0)
-        throw new InvalidArgumentError('linear regression is undefined when x is constant');
-    const slope = assertRepresentable(((sxy / sxx) * ky) / kx, 'slope');
-    const intercept = assertRepresentable(meanY - slope * meanX, 'intercept');
-    const fit = { slope: noNegativeZero(slope), intercept: noNegativeZero(intercept) };
+    const { xs, ys, centered, slope, intercept } = fitLine(x, y);
+    const { sxx, syy, meanX, kx, ky } = centered;
+    const fit = { slope, intercept };
     const predict = (at) => fit.intercept + fit.slope * at;
-    const quality = diagnostics(ys, xs.map(v => predict(v)), 1);
+    // Two accumulators, as in `centeredAround`.
+    let residual0 = 0;
+    let residual1 = 0;
+    const n = xs.length;
+    let i = 0;
+    for (; i + 1 < n; i += 2) {
+        const miss0 = ys[i] - (intercept + slope * xs[i]);
+        const miss1 = ys[i + 1] - (intercept + slope * xs[i + 1]);
+        residual0 += miss0 * miss0;
+        residual1 += miss1 * miss1;
+    }
+    if (i < n) {
+        const miss0 = ys[i] - (intercept + slope * xs[i]);
+        residual0 += miss0 * miss0;
+    }
+    const residual = residual0 + residual1;
+    // In y's own units, the centered syy is exactly the total sum of squares.
+    const total = kx === 1 && ky === 1 ? syy : sumsOfSquares(ys, ys).total; // (only its total is used)
+    const quality = diagnosticsOf({ residual, total }, n, 1);
     const scatter = quality.residualStandardError;
     // sum((x - mean x)^2) is sxx * kx^2; keep the scale factor out of the square.
     const spreadX = Math.sqrt(sxx) * kx;
@@ -890,11 +1030,56 @@ export function linearRegression(x, y) {
         ...fit,
         ...quality,
         slopeStandardError: scatter === undefined ? undefined : noNegativeZero(scatter / spreadX),
-        interceptStandardError: scatter === undefined
-            ? undefined
-            : noNegativeZero(scatter * Math.sqrt(1 / xs.length + (centerX * centerX) / sxx)),
+        interceptStandardError: scatter === undefined ? undefined : noNegativeZero(scatter * Math.sqrt(1 / n + (centerX * centerX) / sxx)),
         predict,
     };
+}
+/**
+ * The data a fit keeps for diagnostics it measures later. A caller's array may
+ * change after the call returns, so it is copied; an array this module built
+ * (from any other iterable) is already the fit's own.
+ */
+function owned(data, input) {
+    return data === input ? [...data] : data;
+}
+/**
+ * `measure`'s result, computed on the first call and returned ever after. Once
+ * it has run, `measure` (and the data it holds) is released.
+ */
+function once(measure) {
+    let state = { measure };
+    return () => {
+        if ('measure' in state)
+            state = { value: state.measure() };
+        return state.value;
+    };
+}
+/**
+ * The least-squares line of validated data, without diagnostics; every
+ * line-based fit starts here. Two plain number arrays take the fused
+ * `arrayCenteredSums` path; anything else (and any data that path declines)
+ * goes through `pairs` and `centeredSums`, which report errors and rescale.
+ */
+function fitLine(x, y) {
+    const fast = Array.isArray(x) && Array.isArray(y) ? arrayCenteredSums(x, y) : undefined;
+    let xs;
+    let ys;
+    let centered;
+    if (fast === undefined) {
+        ({ xs, ys } = pairs(x, y));
+        centered = centeredSums(xs, ys);
+    }
+    else {
+        xs = x;
+        ys = y;
+        centered = fast;
+    }
+    const { sxx, sxy, meanX, meanY, kx, ky } = centered;
+    if (sxx === 0)
+        throw new InvalidArgumentError('linear regression is undefined when x is constant');
+    const slope = assertRepresentable(((sxy / sxx) * ky) / kx, 'slope');
+    const intercept = assertRepresentable(meanY - slope * meanX, 'intercept');
+    return { xs, ys, centered, slope: noNegativeZero(slope), intercept: noNegativeZero(intercept) };
 }
 // ---------------------------------------------------------------------------
 // Inference
@@ -1030,15 +1215,13 @@ function r2Of({ residual, total }) {
         return residual === 0 ? 1 : 0;
     return noNegativeZero(Math.min(1, 1 - residual / total));
 }
-/** `r2` on the original scale. */
-function rSquared(ys, predicted) {
-    return r2Of(sumsOfSquares(ys, predicted));
-}
 /** `r2` plus the diagnostics of a least-squares fit with `predictors` terms besides the intercept. */
 function diagnostics(ys, predicted, predictors) {
-    const sums = sumsOfSquares(ys, predicted);
+    return diagnosticsOf(sumsOfSquares(ys, predicted), ys.length, predictors);
+}
+/** `r2` plus the diagnostics, from the sums of squares of `n` points. */
+function diagnosticsOf(sums, n, predictors) {
     const r2 = r2Of(sums);
-    const n = ys.length;
     const freedom = n - predictors - 1;
     if (freedom <= 0)
         return { r2, adjustedR2: undefined, residualStandardError: undefined };
@@ -1048,10 +1231,30 @@ function diagnostics(ys, predicted, predictors) {
         residualStandardError: noNegativeZero(Math.sqrt(sums.residual / freedom)),
     };
 }
-function assertAllPositive(values, name) {
-    const index = values.findIndex(value => value <= 0);
-    if (index !== -1)
-        throw new InvalidArgumentError(`${name}[${index}] must be positive, got ${values[index]}`);
+/** `ln` of every value, which must all be positive (the first one that is not is reported). */
+function logsOf(values, name) {
+    const logs = [];
+    for (const value of values) {
+        if (value <= 0)
+            throw new InvalidArgumentError(`${name}[${logs.length}] must be positive, got ${value}`);
+        logs.push(Math.log(value));
+    }
+    return logs;
+}
+/** `r2` on the original y of a curve `model`, with `sumsOfSquares`' arithmetic but no array of predictions. */
+function curveR2(xs, ys, model) {
+    return () => {
+        const center = meanOf(ys);
+        let residual = 0;
+        let total = 0;
+        let i = 0;
+        for (const y of ys) {
+            const miss = y - model(xs[i++]);
+            residual += miss * miss;
+            total += (y - center) * (y - center);
+        }
+        return r2Of({ residual, total });
+    };
 }
 /**
  * Exponential fit `y = a * e^(b * x)`, by least squares on `ln y` against x
@@ -1060,15 +1263,17 @@ function assertAllPositive(values, name) {
  */
 export function exponentialRegression(x, y) {
     const { xs, ys } = pairs(x, y);
-    assertAllPositive(ys, 'y');
-    const line = linearRegression(xs, ys.map(v => Math.log(v)));
+    const line = fitLine(xs, logsOf(ys, 'y'));
     const a = assertRepresentable(Math.exp(line.intercept), 'a');
     const b = line.slope;
     const predict = (at) => a * Math.exp(b * at);
+    const r2 = once(curveR2(owned(xs, x), owned(ys, y), predict));
     return {
         a,
         b,
-        r2: rSquared(ys, xs.map(v => predict(v))),
+        get r2() {
+            return r2();
+        },
         predict,
     };
 }
@@ -1079,19 +1284,22 @@ export function exponentialRegression(x, y) {
  */
 export function logarithmicRegression(x, y) {
     const { xs, ys } = pairs(x, y);
-    assertAllPositive(xs, 'x');
-    const line = linearRegression(xs.map(v => Math.log(v)), ys);
-    const { intercept: a, slope: b } = line;
+    const logXs = logsOf(xs, 'x');
+    const { intercept: a, slope: b } = fitLine(logXs, ys);
     const predict = (at) => {
         assertFinite(at, 'x');
         if (at <= 0)
             throw new InvalidArgumentError(`x must be positive, got ${at}`);
         return a + b * Math.log(at);
     };
+    // The model on ln x: `logXs` already holds every Math.log(x), so the result is the same.
+    const r2 = once(curveR2(logXs, owned(ys, y), logX => a + b * logX));
     return {
         a,
         b,
-        r2: rSquared(ys, xs.map(v => predict(v))),
+        get r2() {
+            return r2();
+        },
         predict,
     };
 }
@@ -1102,9 +1310,8 @@ export function logarithmicRegression(x, y) {
  */
 export function powerRegression(x, y) {
     const { xs, ys } = pairs(x, y);
-    assertAllPositive(xs, 'x');
-    assertAllPositive(ys, 'y');
-    const line = linearRegression(xs.map(v => Math.log(v)), ys.map(v => Math.log(v)));
+    const logXs = logsOf(xs, 'x');
+    const line = fitLine(logXs, logsOf(ys, 'y'));
     const a = assertRepresentable(Math.exp(line.intercept), 'a');
     const b = line.slope;
     const predict = (at) => {
@@ -1113,53 +1320,20 @@ export function powerRegression(x, y) {
             throw new InvalidArgumentError(`x must be positive, got ${at}`);
         return a * Math.pow(at, b);
     };
+    const r2 = once(curveR2(owned(xs, x), owned(ys, y), at => a * Math.pow(at, b)));
     return {
         a,
         b,
-        r2: rSquared(ys, xs.map(v => predict(v))),
+        get r2() {
+            return r2();
+        },
         predict,
     };
 }
 /**
- * Solves `matrix * solution = rhs` (square, modified in place) by Gaussian
- * elimination with partial pivoting. A pivot that is tiny next to the largest
- * entry means the system is numerically singular.
- */
-function solveLinearSystem(matrix, rhs) {
-    const size = rhs.length;
-    let largest = 0;
-    for (const row of matrix)
-        for (const value of row)
-            largest = Math.max(largest, Math.abs(value));
-    for (let col = 0; col < size; col++) {
-        let pivotRow = col;
-        for (let r = col + 1; r < size; r++) {
-            if (Math.abs(matrix[r][col]) > Math.abs(matrix[pivotRow][col]))
-                pivotRow = r;
-        }
-        if (Math.abs(matrix[pivotRow][col]) <= largest * 1e-13) {
-            throw new NumericRangeError('polynomial fit is ill-conditioned; lower the degree or rescale x');
-        }
-        [matrix[col], matrix[pivotRow]] = [matrix[pivotRow], matrix[col]];
-        [rhs[col], rhs[pivotRow]] = [rhs[pivotRow], rhs[col]];
-        for (let r = col + 1; r < size; r++) {
-            const factor = matrix[r][col] / matrix[col][col];
-            for (let c = col; c < size; c++)
-                matrix[r][c] -= factor * matrix[col][c];
-            rhs[r] -= factor * rhs[col];
-        }
-    }
-    const solution = Array.from({ length: size }).fill(0);
-    for (let r = size - 1; r >= 0; r--) {
-        let acc = rhs[r];
-        for (let c = r + 1; c < size; c++)
-            acc -= matrix[r][c] * solution[c];
-        solution[r] = acc / matrix[r][r];
-    }
-    return solution;
-}
-/**
- * Least-squares polynomial of the given `degree`, by the normal equations.
+ * Least-squares polynomial of the given `degree`, by Householder QR with
+ * column pivoting on the Vandermonde matrix (never the normal equations, which
+ * square its condition number; NumPy's `polyfit` uses an SVD to the same end).
  * Coefficients are lowest degree first (`[c0, c1, ...]`); `r2` is measured on
  * the original y.
  *
@@ -1173,8 +1347,10 @@ function solveLinearSystem(matrix, rhs) {
  * lose digits that `predict` keeps.
  *
  * Throws `InvalidArgumentError` for a non-integer or negative degree, or fewer
- * distinct x values than `degree + 1`, and `NumericRangeError` when the system
- * is numerically singular.
+ * distinct x values than `degree + 1`, and `NumericRangeError` when the
+ * Vandermonde matrix is rank-deficient to working precision: some `|r_kk|` of
+ * its column-normalized QR is at or below `n · Number.EPSILON · |r₀₀|` (`n`
+ * points), the rank rule of NumPy's `polyfit`, where NumPy warns.
  */
 export function polynomialRegression(x, y, degree) {
     if (!Number.isInteger(degree) || degree < 0) {
@@ -1196,21 +1372,48 @@ export function polynomialRegression(x, y, degree) {
     const center = low / 2 + high / 2;
     const halfRange = high / 2 - low / 2 || 1;
     const size = degree + 1;
-    // powerSums[k] = sum(u^k), moments[k] = sum(u^k * y), with u = (x - center) / halfRange.
-    const powerSums = Array.from({ length: 2 * degree + 1 }).fill(0);
-    const moments = Array.from({ length: size }).fill(0);
-    for (const [i, value] of xs.entries()) {
-        const u = (value - center) / halfRange;
+    const count = xs.length;
+    // The Vandermonde matrix in u = (x - center) / halfRange, by columns (u^0, u^1, ...),
+    // each scaled to unit norm as NumPy's polyfit does, so the rank test below
+    // compares columns on an equal footing. |u| <= 1 with u = ±1 at the ends, so
+    // every column has norm >= 1 and no power overflows.
+    const buffer = new Float64Array(count * size);
+    const columns = [];
+    for (let k = 0; k < size; k++)
+        columns.push(buffer.subarray(k * count, k * count + count));
+    const squares = new Float64Array(size);
+    for (let i = 0; i < count; i++) {
+        const u = (xs[i] - center) / halfRange;
         let power = 1;
-        for (let k = 0; k <= 2 * degree; k++) {
-            powerSums[k] += power;
-            if (k < size)
-                moments[k] += power * (ys[i] ?? 0);
+        for (let k = 0; k < size; k++) {
+            columns[k][i] = power;
+            squares[k] += power * power;
             power *= u;
         }
     }
-    const matrix = Array.from({ length: size }, (_, r) => Array.from({ length: size }, (_, c) => powerSums[r + c]));
-    const centered = solveLinearSystem(matrix, moments);
+    const norms = [];
+    for (const [k, column] of columns.entries()) {
+        const norm = Math.sqrt(squares[k]);
+        const inverse = 1 / norm;
+        for (let i = 0; i < count; i++)
+            column[i] *= inverse;
+        norms.push(norm);
+    }
+    // Least squares by Householder QR with column pivoting: the error grows with
+    // cond(V), where the normal equations VᵀV·c = Vᵀy would square it.
+    const { tau, permutation } = householderQr(columns, count, true);
+    const threshold = count * Number.EPSILON * Math.abs(columns[0][0]);
+    for (let k = 0; k < size; k++) {
+        if (!(Math.abs(columns[k][k]) > threshold)) {
+            throw new NumericRangeError('polynomial fit is ill-conditioned; lower the degree or rescale x');
+        }
+    }
+    const solution = new Float64Array(ys);
+    applyQTranspose(columns, tau, count, solution);
+    backSubstitute(columns, size, solution);
+    const centered = Array.from({ length: size }).fill(0);
+    for (let k = 0; k < size; k++)
+        centered[permutation[k]] = solution[k] / norms[permutation[k]];
     const predictCentered = (at) => {
         const u = (at - center) / halfRange;
         let result = 0;
@@ -1231,10 +1434,23 @@ export function polynomialRegression(x, y, degree) {
         assertFinite(at, 'x');
         return predictCentered(at);
     };
+    const measured = once(polynomialDiagnostics(owned(xs, x), owned(ys, y), predictCentered, degree));
     return {
         coefficients: coefficients.map(c => assertRepresentable(noNegativeZero(c), 'coefficient')),
-        ...diagnostics(ys, xs.map(v => predictCentered(v)), degree),
+        get r2() {
+            return measured().r2;
+        },
+        get adjustedR2() {
+            return measured().adjustedR2;
+        },
+        get residualStandardError() {
+            return measured().residualStandardError;
+        },
         predict,
     };
+}
+/** `polynomialRegression`'s diagnostics, from the fit's predictions at every x. */
+function polynomialDiagnostics(xs, ys, predictCentered, degree) {
+    return () => diagnostics(ys, xs.map(v => predictCentered(v)), degree);
 }
 //# sourceMappingURL=stats.js.map
