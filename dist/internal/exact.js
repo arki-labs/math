@@ -191,6 +191,23 @@ export class Decimal {
     round(places = 0, rounding = 'halfUp') {
         return this.toScale(places, rounding);
     }
+    /**
+     * Rounds to `digits` significant figures: `decimal('123456').roundToSignificant(2)` → `120000`,
+     * `decimal('0.012345').roundToSignificant(3)` → `0.0123`. Fewer digits than that are left as is. Default half-up.
+     */
+    roundToSignificant(digits, rounding = 'halfUp') {
+        if (!Number.isSafeInteger(digits) || digits < 1) {
+            throw new InvalidArgumentError(`digits must be a positive integer, got ${digits}`);
+        }
+        const drop = digitCount(abs(this.coefficient)) - digits;
+        if (this.coefficient === 0n || drop <= 0)
+            return this;
+        const rounded = divideRounded(this.coefficient, pow10(drop), rounding);
+        // Rounding away the integer digits leaves trailing zeros: keep them as integer zeros, not a negative scale.
+        return this.scale >= drop
+            ? new Decimal(rounded, this.scale - drop, BRAND)
+            : new Decimal(rounded * pow10(drop - this.scale), 0, BRAND);
+    }
     /** Rounds to the nearest multiple of `step`: `decimal('1.23').roundTo('0.05')` → `1.25`. Default half-up. */
     roundTo(step, rounding = 'halfUp') {
         const unit = Decimal.from(step);

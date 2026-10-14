@@ -32,4 +32,10 @@ export declare class ResourceLimitError extends MathError {
 /** The runtime lacks an `Intl` feature this call depends on. */
 export declare class UnsupportedFeatureError extends MathError {
 }
+/** A matrix is singular to working precision, so it has no inverse and `A·x = b` has no unique solution. */
+export declare class SingularMatrixError extends MathError {
+}
+/** An iterative method did not reach its tolerance within its iteration limit. */
+export declare class ConvergenceError extends MathError {
+}
 //# sourceMappingURL=errors.d.ts.map

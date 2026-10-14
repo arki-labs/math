@@ -45,11 +45,25 @@ export type DiscreteDistribution = {
 };
 /** Natural log of the gamma function, ln Γ(x), for x > 0 (Lanczos, g = 7, ~1e-15). */
 export declare function gammaLn(x: number): number;
+/**
+ * The gamma function Γ(x) for finite `x`. `Γ(n + 1) = n!`, so this is the float
+ * factorial for `n > 18`. Positive integers up to 171 are exact products;
+ * other values use Lanczos (relative error ~1e-15) with the reflection formula
+ * for `x < 0.5`. Poles (`0` and the negative integers) throw
+ * `InvalidArgumentError`; a result beyond the double range (`x` above about
+ * 171.62, or `x` within ~1e-308 of a pole) throws `NumericRangeError`.
+ * Very negative `x` whose true value is below the smallest double returns `0`.
+ */
+export declare function gamma(x: number): number;
+/** ln B(a, b) = ln Γ(a) + ln Γ(b) − ln Γ(a + b), for `a, b > 0`. */
+export declare function betaLn(a: number, b: number): number;
+/** The beta function B(a, b) = Γ(a)Γ(b) / Γ(a + b), for `a, b > 0`. Underflows to `0` for very large arguments. */
+export declare function beta(a: number, b: number): number;
 /** Regularized lower incomplete gamma P(a, x) = γ(a, x) / Γ(a), for a > 0 and x ≥ 0. */
 export declare function regularizedGammaP(a: number, x: number): number;
 /** Regularized incomplete beta I_x(a, b) for x in [0, 1] and a, b > 0. */
 export declare function regularizedBeta(x: number, a: number, b: number): number;
-/** The error function erf(x) = 2/√π ∫₀ˣ e^(−t²) dt (via the incomplete gamma function, ~1e-15). */
+/** The error function erf(x) = 2/√π ∫₀ˣ e^(−t²) dt (Cody's rational approximations, ~1e-16). */
 export declare function erf(x: number): number;
 /** The complementary error function erfc(x) = 1 − erf(x), accurate in the far tail. */
 export declare function erfc(x: number): number;

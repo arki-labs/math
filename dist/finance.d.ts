@@ -5,12 +5,18 @@
  * - `rate` is per period, as a fraction: `0.05` is 5 %. Monthly loan at 6 %
  *   a year → `0.06 / 12` (as a Decimal, not a float).
  * - `periods` is a non-negative safe integer everywhere (`InvalidArgumentError`
- *   otherwise). For fractional compounding, use `pow` from
- *   `@arki/math/decimal-math` with the scale you need.
+ *   otherwise). For fractional or negative periods, growth too large for exact
+ *   digits, or tight loops, use the float layer `@arki/math/finance/float`: the
+ *   same function names and sign conventions on plain `number`.
  * - Cash outflows are negative and inflows positive in `netPresentValue` and
  *   `internalRateOfReturn`. `payment` is the one exception: it returns a
  *   positive number for a positive principal (Excel's `PMT` returns it negated).
  * - `timing` follows Excel's `type` argument: `'end'` is 0, `'begin'` is 1.
+ * - `futureValue` and `presentValue` return balances, not Excel cash flows:
+ *   `futureValue(pv, rate, n, { payment, timing })` is `-FV(rate, n, payment,
+ *   pv, type)` and `presentValue(fv, rate, n, { payment, timing, scale })` is
+ *   `-PV(rate, n, payment, fv, type)`. Same-sign inputs add up; a negative
+ *   `payment` is a withdrawal or a loan repayment.
  *
  * `payment`, `netPresentValue`, `futureValue`, `presentValue`,
  * `compoundInterest`, `effectiveRate` and `simpleInterest` are exact: every
@@ -20,16 +26,33 @@
  * `'halfEven'` (banker's rounding). `nominalRate` needs an n-th root, which it
  * computes with guard digits (see its doc for the one caveat).
  * `internalRateOfReturn` and `periodsToReach` are float functions, approximate
- * by nature.
+ * by nature (a root and a logarithm, which no exact type holds); they are
+ * re-exported from the float layer. `periodsToReach` with `{ payment }` is
+ * Excel `NPER`.
  */
 import type { DecimalInput, ScaleOptions } from './decimal.js';
+import type { PaymentTiming } from './finance-float.js';
 import { Decimal } from './decimal.js';
-/** When in the period payments fall: `'end'` is Excel `type` 0, `'begin'` is `type` 1. */
-export type PaymentTiming = 'end' | 'begin';
+export type { PaymentTiming } from './finance-float.js';
+export { internalRateOfReturn, periodsToReach } from './finance-float.js';
 /** Options for `payment` and `amortizationSchedule`. */
 export type PaymentOptions = ScaleOptions & {
     timing?: PaymentTiming;
 };
+/** A level payment made every period, added to the balance (negative to withdraw). */
+export type AnnuityOptions = {
+    /** Paid in (positive) or taken out (negative) every period. Defaults to 0. */
+    payment?: DecimalInput;
+    /** When in the period the payment falls. Defaults to `'end'`. */
+    timing?: PaymentTiming;
+};
+/** `futureValue` options: an optional payment, and `{ scale, rounding }` only together. */
+export type FutureValueOptions = AnnuityOptions & (ScaleOptions | {
+    scale?: undefined;
+    rounding?: undefined;
+});
+/** `presentValue` options: an optional payment and the required `{ scale }`. */
+export type PresentValueOptions = AnnuityOptions & ScaleOptions;
 /** One line of an amortization schedule. */
 export type AmortizationRow = {
     /** 1-based period number. */
@@ -44,20 +67,24 @@ export type AmortizationRow = {
     balance: Decimal;
 };
 /**
- * Compound growth: `principal × (1 + rate)^periods`.
+ * Balance after `periods`: `principal × (1 + rate)^periods`, plus each
+ * `payment` grown to the end (Excel `FV`, negated; see the module doc).
  *
  * Exact; pass `{ scale }` to round the result once. `periods` must be a
- * non-negative safe integer. For fractional periods, compute the power yourself
- * with `pow` from `@arki/math/decimal-math`.
+ * non-negative safe integer. For fractional periods, use
+ * `@arki/math/finance/float`.
  */
-export declare function futureValue(principal: DecimalInput, rate: DecimalInput, periods: number, options?: ScaleOptions): Decimal;
+export declare function futureValue(principal: DecimalInput, rate: DecimalInput, periods: number, options?: FutureValueOptions): Decimal;
 /**
- * Today's worth of a future `amount`: `amount ÷ (1 + rate)^periods`.
+ * Today's worth of `amount` due after `periods`, plus each `payment`
+ * discounted to today (Excel `PV`, negated; see the module doc):
+ * `(amount + payment × timing × ((1 + rate)^periods − 1) ÷ rate) ÷ (1 + rate)^periods`.
+ *
  * Always needs `{ scale }` because the division rarely terminates; the one
  * division is the only rounding. `periods` must be a non-negative safe integer
  * (see `futureValue` for fractional periods).
  */
-export declare function presentValue(amount: DecimalInput, rate: DecimalInput, periods: number, options: ScaleOptions): Decimal;
+export declare function presentValue(amount: DecimalInput, rate: DecimalInput, periods: number, options: PresentValueOptions): Decimal;
 /**
  * Excel `PMT`: the level payment that pays off a loan of `principal` over
  * `periods` at `rate` per period.
@@ -97,22 +124,6 @@ export declare function amortizationSchedule(principal: DecimalInput, rate: Deci
  */
 export declare function netPresentValue(rate: DecimalInput, cashFlows: readonly DecimalInput[], options: ScaleOptions): Decimal;
 /**
- * Internal rate of return as a JS number (the rate that makes NPV zero), like
- * Excel `IRR`. Cash flows start at t = 0 and need at least one negative and one
- * positive value.
- *
- * Inherently approximate: Newton's method from `guess` (default 0.1), falling
- * back to a bracketed bisection. `tolerance` (default `1e-10`) is Newton's step
- * size at convergence, and the check every answer must pass: the NPV at the
- * returned rate is at most `tolerance` times the sum of the absolute
- * discounted flows. Throws `InvalidArgumentError` when there is no sign change
- * or no rate passes that check.
- */
-export declare function internalRateOfReturn(cashFlows: readonly number[], options?: {
-    guess?: number;
-    tolerance?: number;
-}): number;
-/**
  * Effective annual rate from a nominal rate compounded `periodsPerYear` times:
  * `(1 + nominal ÷ n)^n − 1`. Computed as an exact fraction and rounded once
  * with `{ scale }`. Without options the exact value is returned when it
@@ -137,10 +148,4 @@ export declare function nominalRate(effectiveRate: DecimalInput, periodsPerYear:
 export declare function compoundInterest(principal: DecimalInput, rate: DecimalInput, periods: number, options?: ScaleOptions): Decimal;
 /** `principal × rate × periods`, exact. `periods` may be fractional (pass it as a string or Decimal). */
 export declare function simpleInterest(principal: DecimalInput, rate: DecimalInput, periods: DecimalInput): Decimal;
-/**
- * Periods needed for `principal` to grow to `target` at `rate` per period:
- * `ln(target ÷ principal) ÷ ln(1 + rate)`. A float, so the result is
- * approximate and may be fractional. Throws when the target is unreachable.
- */
-export declare function periodsToReach(principal: number, target: number, rate: number): number;
 //# sourceMappingURL=finance.d.ts.map

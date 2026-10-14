@@ -5,12 +5,18 @@
  * - `rate` is per period, as a fraction: `0.05` is 5 %. Monthly loan at 6 %
  *   a year → `0.06 / 12` (as a Decimal, not a float).
  * - `periods` is a non-negative safe integer everywhere (`InvalidArgumentError`
- *   otherwise). For fractional compounding, use `pow` from
- *   `@arki/math/decimal-math` with the scale you need.
+ *   otherwise). For fractional or negative periods, growth too large for exact
+ *   digits, or tight loops, use the float layer `@arki/math/finance/float`: the
+ *   same function names and sign conventions on plain `number`.
  * - Cash outflows are negative and inflows positive in `netPresentValue` and
  *   `internalRateOfReturn`. `payment` is the one exception: it returns a
  *   positive number for a positive principal (Excel's `PMT` returns it negated).
  * - `timing` follows Excel's `type` argument: `'end'` is 0, `'begin'` is 1.
+ * - `futureValue` and `presentValue` return balances, not Excel cash flows:
+ *   `futureValue(pv, rate, n, { payment, timing })` is `-FV(rate, n, payment,
+ *   pv, type)` and `presentValue(fv, rate, n, { payment, timing, scale })` is
+ *   `-PV(rate, n, payment, fv, type)`. Same-sign inputs add up; a negative
+ *   `payment` is a withdrawal or a loan repayment.
  *
  * `payment`, `netPresentValue`, `futureValue`, `presentValue`,
  * `compoundInterest`, `effectiveRate` and `simpleInterest` are exact: every
@@ -20,13 +26,16 @@
  * `'halfEven'` (banker's rounding). `nominalRate` needs an n-th root, which it
  * computes with guard digits (see its doc for the one caveat).
  * `internalRateOfReturn` and `periodsToReach` are float functions, approximate
- * by nature.
+ * by nature (a root and a logarithm, which no exact type holds); they are
+ * re-exported from the float layer. `periodsToReach` with `{ payment }` is
+ * Excel `NPER`.
  */
-import { Decimal } from './decimal.js';
 import { nthRoot } from './decimal-math.js';
+import { Decimal } from './decimal.js';
 import { InvalidArgumentError, ResourceLimitError } from './errors.js';
 import { assertFinite } from './number.js';
 import { ratio } from './rational.js';
+export { internalRateOfReturn, periodsToReach } from './finance-float.js';
 /** Extra digits carried through `nominalRate`'s n-th root, so the final rounding is the only visible one. */
 const GUARD_DIGITS = 10;
 /** Most rows `amortizationSchedule` builds; more throws `ResourceLimitError`. */
@@ -60,26 +69,54 @@ function growth(rate, periods) {
     return growthFactor(rate).pow(periods);
 }
 function finish(value, options) {
-    return options === undefined ? value : value.toScale(options.scale, resolveRounding(options));
+    return options?.scale === undefined ? value : value.toScale(options.scale, options.rounding ?? 'halfEven');
 }
 /**
- * Compound growth: `principal × (1 + rate)^periods`.
+ * Every `payment` grown to the end of `periods`:
+ * `payment × timing × ((1 + rate)^periods − 1) ÷ rate`, where `timing` is
+ * `1 + rate` for `'begin'` and 1 for `'end'`. The quotient is the polynomial
+ * `Σ (1 + rate)^k`, so the division is exact. A rate of 0 gives
+ * `payment × periods`.
+ */
+function grownPayments(rate, periods, compounded, options) {
+    const { payment: level = 0, timing } = options;
+    const periodRate = Decimal.from(rate);
+    if (periodRate.isZero())
+        return Decimal.from(level).times(periods);
+    const perUnit = compounded.minus(1).dividedBy(periodRate);
+    const due = timing === 'begin' ? perUnit.times(ONE.plus(periodRate)) : perUnit;
+    return due.times(level);
+}
+/**
+ * Balance after `periods`: `principal × (1 + rate)^periods`, plus each
+ * `payment` grown to the end (Excel `FV`, negated; see the module doc).
  *
  * Exact; pass `{ scale }` to round the result once. `periods` must be a
- * non-negative safe integer. For fractional periods, compute the power yourself
- * with `pow` from `@arki/math/decimal-math`.
+ * non-negative safe integer. For fractional periods, use
+ * `@arki/math/finance/float`.
  */
 export function futureValue(principal, rate, periods, options) {
-    return finish(Decimal.from(principal).times(growth(rate, periods)), options);
+    const compounded = growth(rate, periods);
+    const grown = Decimal.from(principal).times(compounded);
+    if (options?.payment === undefined)
+        return finish(grown, options);
+    return finish(grown.plus(grownPayments(rate, periods, compounded, options)), options);
 }
 /**
- * Today's worth of a future `amount`: `amount ÷ (1 + rate)^periods`.
+ * Today's worth of `amount` due after `periods`, plus each `payment`
+ * discounted to today (Excel `PV`, negated; see the module doc):
+ * `(amount + payment × timing × ((1 + rate)^periods − 1) ÷ rate) ÷ (1 + rate)^periods`.
+ *
  * Always needs `{ scale }` because the division rarely terminates; the one
  * division is the only rounding. `periods` must be a non-negative safe integer
  * (see `futureValue` for fractional periods).
  */
 export function presentValue(amount, rate, periods, options) {
-    return Decimal.from(amount).dividedBy(growth(rate, periods), { scale: options.scale, rounding: resolveRounding(options) });
+    const compounded = growth(rate, periods);
+    const atEnd = options.payment === undefined
+        ? Decimal.from(amount)
+        : Decimal.from(amount).plus(grownPayments(rate, periods, compounded, options));
+    return atEnd.dividedBy(compounded, { scale: options.scale, rounding: resolveRounding(options) });
 }
 /**
  * Excel `PMT`: the level payment that pays off a loan of `principal` over
@@ -157,142 +194,10 @@ export function netPresentValue(rate, cashFlows, options) {
     let numerator = Decimal.from(0);
     for (const flow of cashFlows)
         numerator = numerator.times(factor).plus(flow);
-    return numerator.dividedBy(factor.pow(cashFlows.length), { scale: options.scale, rounding: resolveRounding(options) });
-}
-function npvAt(rate, cashFlows) {
-    let total = 0;
-    for (let t = 0; t < cashFlows.length; t++)
-        total += (cashFlows[t] ?? 0) / (1 + rate) ** t;
-    return total;
-}
-function npvSlope(rate, cashFlows) {
-    let total = 0;
-    for (let t = 1; t < cashFlows.length; t++)
-        total -= (t * (cashFlows[t] ?? 0)) / (1 + rate) ** (t + 1);
-    return total;
-}
-function newton(cashFlows, guess, tolerance) {
-    let rate = guess;
-    for (let i = 0; i < 100; i++) {
-        const slope = npvSlope(rate, cashFlows);
-        if (slope === 0 || !Number.isFinite(slope))
-            return undefined;
-        const next = rate - npvAt(rate, cashFlows) / slope;
-        if (!Number.isFinite(next) || next <= -1)
-            return undefined;
-        if (Math.abs(next - rate) < tolerance)
-            return next;
-        rate = next;
-    }
-    return undefined;
-}
-/**
- * Bisects `u` in `[a, b]` (rate `e^u - 1`) down to float precision. Gives up
- * if a midpoint's NPV is not finite (it under- or overflowed).
- */
-function refineBracket(cashFlows, lo, hi, fLo) {
-    let a = lo;
-    let b = hi;
-    let fa = fLo;
-    for (let i = 0; i < 200; i++) {
-        const mid = (a + b) / 2;
-        if (mid <= a || mid >= b)
-            break;
-        const fMid = npvAt(Math.expm1(mid), cashFlows);
-        if (!Number.isFinite(fMid))
-            return undefined;
-        if (fMid === 0)
-            return Math.expm1(mid);
-        if (Math.sign(fMid) === Math.sign(fa)) {
-            a = mid;
-            fa = fMid;
-        }
-        else {
-            b = mid;
-        }
-    }
-    return Math.expm1((a + b) / 2);
-}
-/**
- * Scans `rate = e^u - 1` for a sign change of the NPV, then bisects on `u`.
- * Only two neighbouring finite NPVs form a bracket: an NPV that under- or
- * overflowed (`NaN`, `±Infinity`) is no evidence of a sign change.
- */
-function bisect(cashFlows) {
-    const start = -9;
-    const step = 0.05;
-    const steps = 580; // u from -9 to 20
-    let lo;
-    let fLo = 0;
-    for (let k = 0; k <= steps; k++) {
-        const u = start + k * step;
-        const fU = npvAt(Math.expm1(u), cashFlows);
-        if (!Number.isFinite(fU)) {
-            lo = undefined;
-            continue;
-        }
-        if (fU === 0)
-            return Math.expm1(u);
-        if (lo !== undefined && Math.sign(fU) !== Math.sign(fLo)) {
-            const root = refineBracket(cashFlows, lo, u, fLo);
-            if (root !== undefined)
-                return root;
-        }
-        lo = u;
-        fLo = fU;
-    }
-    return undefined;
-}
-/**
- * Whether `rate` really zeroes the NPV: `|npv| ≤ tolerance × Σ|discounted flow|`.
- * The relative bound never drops below float noise (`n × ε`), which no float
- * root can beat.
- */
-function isRoot(rate, cashFlows, tolerance) {
-    if (!Number.isFinite(rate) || rate <= -1)
-        return false;
-    let total = 0;
-    let magnitude = 0;
-    for (const [t, flow] of cashFlows.entries()) {
-        const term = flow / (1 + rate) ** t;
-        total += term;
-        magnitude += Math.abs(term);
-    }
-    if (!Number.isFinite(total) || !Number.isFinite(magnitude))
-        return false;
-    return Math.abs(total) <= Math.max(tolerance, cashFlows.length * Number.EPSILON) * magnitude;
-}
-/**
- * Internal rate of return as a JS number (the rate that makes NPV zero), like
- * Excel `IRR`. Cash flows start at t = 0 and need at least one negative and one
- * positive value.
- *
- * Inherently approximate: Newton's method from `guess` (default 0.1), falling
- * back to a bracketed bisection. `tolerance` (default `1e-10`) is Newton's step
- * size at convergence, and the check every answer must pass: the NPV at the
- * returned rate is at most `tolerance` times the sum of the absolute
- * discounted flows. Throws `InvalidArgumentError` when there is no sign change
- * or no rate passes that check.
- */
-export function internalRateOfReturn(cashFlows, options = {}) {
-    const { guess = 0.1, tolerance = 1e-10 } = options;
-    assertFinite(guess, 'guess');
-    assertFinite(tolerance, 'tolerance');
-    if (tolerance <= 0)
-        throw new InvalidArgumentError(`tolerance must be positive, got ${tolerance}`);
-    if (cashFlows.length < 2)
-        throw new InvalidArgumentError('cashFlows needs at least two values');
-    for (const [i, flow] of cashFlows.entries())
-        assertFinite(flow, `cashFlows[${i}]`);
-    if (!cashFlows.some(flow => flow > 0) || !cashFlows.some(flow => flow < 0)) {
-        throw new InvalidArgumentError('cashFlows needs at least one positive and one negative value');
-    }
-    const fromNewton = newton(cashFlows, guess, tolerance);
-    const found = fromNewton !== undefined && isRoot(fromNewton, cashFlows, tolerance) ? fromNewton : bisect(cashFlows);
-    if (found === undefined || !isRoot(found, cashFlows, tolerance)) {
-        throw new InvalidArgumentError('internalRateOfReturn: no convergence');
-    }
-    return found === 0 ? 0 : found;
+    return numerator.dividedBy(factor.pow(cashFlows.length), {
+        scale: options.scale,
+        rounding: resolveRounding(options),
+    });
 }
 function assertPeriodsPerYear(periodsPerYear) {
     assertFinite(periodsPerYear, 'periodsPerYear');
@@ -349,28 +254,5 @@ export function simpleInterest(principal, rate, periods) {
     if (time.isNegative())
         throw new InvalidArgumentError(`periods must not be negative, got ${time.toString()}`);
     return Decimal.from(principal).times(rate).times(time);
-}
-/**
- * Periods needed for `principal` to grow to `target` at `rate` per period:
- * `ln(target ÷ principal) ÷ ln(1 + rate)`. A float, so the result is
- * approximate and may be fractional. Throws when the target is unreachable.
- */
-export function periodsToReach(principal, target, rate) {
-    assertFinite(principal, 'principal');
-    assertFinite(target, 'target');
-    assertFinite(rate, 'rate');
-    if (principal <= 0)
-        throw new InvalidArgumentError(`principal must be positive, got ${principal}`);
-    if (target <= 0)
-        throw new InvalidArgumentError(`target must be positive, got ${target}`);
-    if (rate <= -1)
-        throw new InvalidArgumentError(`rate must be greater than -1, got ${rate}`);
-    if (rate === 0)
-        throw new InvalidArgumentError('rate must not be 0: the balance never changes');
-    // Difference of logs, not log of the ratio: target ÷ principal can overflow to Infinity.
-    const periods = (Math.log(target) - Math.log(principal)) / Math.log1p(rate);
-    if (periods < 0)
-        throw new InvalidArgumentError('target cannot be reached at this rate');
-    return periods;
 }
 //# sourceMappingURL=finance.js.map

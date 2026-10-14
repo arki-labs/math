@@ -12,7 +12,12 @@ import type { RoundingMode } from './rounding.js';
 /** A formattable value. A string must be a number in plain decimal syntax (`'-1234.50'`). */
 export type FormatValue = number | bigint | Decimal | string;
 export type FormatOptions = {
-    /** BCP 47 locale tag. Default `'en-US'`. */
+    /**
+     * BCP 47 locale tag. Default `'en-US'`, so output is the same on every machine
+     * (SSR-safe). Pass `'default'` (`RUNTIME_LOCALE`) to opt in to the runtime's own
+     * locale, what `toLocaleString()` uses with no argument; the output then depends
+     * on the user's machine.
+     */
     locale?: string;
     minimumFractionDigits?: number;
     maximumFractionDigits?: number;
@@ -29,11 +34,27 @@ export type CurrencyOptions = {
 export type CompactOptions = {
     /** `'short'` gives `1.2M`, `'long'` gives `1.2 million`. Default `'short'`. */
     display?: 'short' | 'long';
+    /**
+     * An ISO 4217 code that turns the result into compact money: `{ currency: 'USD' }` gives
+     * `$1.3M`. The fraction-digit defaults (0 to 1) still apply, so ask for
+     * `maximumFractionDigits: 2` to get `$1.25M`. A formatter's bound currency is not used here.
+     */
+    currency?: string;
+    /** How the currency is shown, as in `formatCurrency`. Only used with `currency`. */
+    currencyDisplay?: CurrencyOptions['currencyDisplay'];
 } & FormatOptions;
 export type FileSizeOptions = {
-    /** `'si'` uses powers of 1000 (`kB`), `'iec'` powers of 1024 (`KiB`). Default `'si'`. */
-    system?: 'si' | 'iec';
+    /**
+     * `'si'` uses powers of 1000 (`kB`), `'iec'` powers of 1024 (`KiB`), `'jedec'` powers of 1024
+     * with the `KB`/`MB`/`GB` labels most file managers print. Default `'si'`.
+     */
+    system?: 'si' | 'iec' | 'jedec';
 } & FormatOptions;
+/**
+ * Pass as `locale` to use the runtime's default locale instead of `'en-US'`.
+ * It is a word, not `undefined`, so a missing locale can never switch it on by accident.
+ */
+export declare const RUNTIME_LOCALE = "default";
 /** Formats a number for display: `formatNumber(1234.5)` → `'1,234.5'`. Intl defaults: 0–3 fraction digits. */
 export declare function formatNumber(value: FormatValue, options?: FormatOptions): string;
 /**
@@ -47,7 +68,10 @@ export declare function formatCurrency(value: FormatValue, currency: string, opt
  * Default 0–2 fraction digits.
  */
 export declare function formatPercent(fraction: FormatValue, options?: FormatOptions): string;
-/** Short or long compact form: `formatCompact(1230000)` → `'1.2M'`. Default max 1 fraction digit. */
+/**
+ * Short or long compact form: `formatCompact(1230000)` → `'1.2M'`. Default max 1 fraction digit.
+ * With `currency` it is compact money: `formatCompact(1_250_000, { currency: 'USD' })` → `'$1.3M'`.
+ */
 export declare function formatCompact(value: FormatValue, options?: CompactOptions): string;
 /**
  * Human file size: `formatFileSize(1536)` → `'1.5 kB'`. Picks the largest unit

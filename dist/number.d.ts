@@ -5,6 +5,7 @@
  * Every input must be finite; `NaN` and `±Infinity` throw rather than spread.
  * Results never carry `-0`.
  */
+import type { Decimal } from './internal/exact.js';
 import type { RoundingMode } from './rounding.js';
 /** Interval notation: `[` / `]` include the bound, `(` / `)` exclude it. */
 export type Bounds = '[]' | '[)' | '(]' | '()';
@@ -41,10 +42,34 @@ export declare function inRange(x: number, min: number, max: number, bounds?: Bo
  * Rounds the number you typed, not its binary approximation:
  * `round(1.005, 2)` is `1.01` (plain `Math.round(1.005 * 100) / 100` gives `1`).
  * Negative `places` round to tens, hundreds, ...
+ *
+ * Most calls take a float fast path that is proven to give the same result as
+ * exact decimal rounding; only values within a few ulps of a tie (or of a whole
+ * unit, for the directed modes) pay for the exact path.
  */
 export declare function round(x: number, places?: number, mode?: RoundingMode): number;
 /** Rounds to the nearest multiple of `step`, measured from zero: `roundTo(127.3, 5)` → `125`. */
 export declare function roundTo(x: number, step: number, mode?: RoundingMode): number;
+/**
+ * Rounds to `digits` significant figures, on the number you typed:
+ * `roundToSignificant(123_456, 2)` is `120000`, `roundToSignificant(0.012_345, 3)`
+ * is `0.0123`. A number with fewer digits is returned as is (nothing is padded).
+ * Works for every finite double, from subnormals to `6.02214076e23` and beyond:
+ * the digits are those of the number's shortest decimal text, `String(x)`.
+ * Throws `NumericRangeError` only when rounding up past the largest double
+ * (`roundToSignificant(1.7976931348623157e308, 1)` would be `2e308`).
+ */
+export declare function roundToSignificant(x: number, digits: number, mode?: RoundingMode): number;
+/**
+ * Counts the significant figures in a written number by the textbook rules:
+ * leading zeros never count, zeros between digits always count, and trailing
+ * zeros count only when there is a decimal point.
+ * `'1200'` → 2, `'1200.'` → 4, `'0.00120'` → 3, `'1.20e3'` → 3. The exponent
+ * is ignored. Zero counts its written zeros after the point (`'0'` → 1, `'0.00'` → 2).
+ * Pass the text (or a `Decimal`, whose scale is its written precision):
+ * a JS number cannot tell `1.20` from `1.2`. Anything else throws `NumberFormatError`.
+ */
+export declare function significantDigits(value: string | Decimal): number;
 /**
  * Tolerant equality for floats. `tolerance` is relative to the larger
  * magnitude (and absolute near zero), so it works for both `0.1 + 0.2 ≈ 0.3`

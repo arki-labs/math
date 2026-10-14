@@ -19,7 +19,7 @@ export declare function divmod(a: bigint, b: bigint): [quotient: bigint, remaind
 /**
  * `n!`. The `number` form works up to `n = 18`; above that the result is
  * unsafe and it throws `NumericRangeError`. The `bigint` form is capped at
- * `n = 10_000` (`ResourceLimitError`).
+ * `n = 25_205` (results up to 100,000 digits; `ResourceLimitError`).
  */
 export declare function factorial(n: number): number;
 export declare function factorial(n: bigint): bigint;
@@ -27,13 +27,13 @@ export declare function factorial(n: bigint): bigint;
  * Binomial coefficient C(n, k), the number of ways to choose `k` of `n`.
  * Returns `0` when `k` is outside `0..n`. Uses the multiplicative formula,
  * dividing at every step so values stay integral. The `bigint` form allows
- * at most 10_000 steps (`ResourceLimitError`).
+ * at most 100_000 steps and a 100,000-digit result (`ResourceLimitError`).
  */
 export declare function combinations(n: number, k: number): number;
 export declare function combinations(n: bigint, k: bigint): bigint;
 /**
  * Ordered selections P(n, k) = n! / (n − k)!. Returns `0` when `k` is
- * outside `0..n`. The `bigint` form allows at most 10_000 terms.
+ * outside `0..n`. The `bigint` form allows at most 100_000 terms and a 100,000-digit result.
  */
 export declare function permutations(n: number, k: number): number;
 export declare function permutations(n: bigint, k: bigint): bigint;
@@ -76,6 +76,19 @@ export declare function isEven(n: number | bigint): boolean;
 export declare function isOdd(n: number | bigint): boolean;
 /** Sum of the decimal digits of `|n|`: `digitSum(-123)` is `6`. */
 export declare function digitSum(n: number | bigint): number;
+/**
+ * Writes an integer in `base` 2 to 36 with lowercase digits: `toBase(255, 16)`
+ * is `'ff'`, `toBase(-10, 2)` is `'-1010'`. A `number` must be a safe integer;
+ * a `bigint` is exact at any size. No prefix (`0x`) is added.
+ */
+export declare function toBase(value: number | bigint, base: number): string;
+/**
+ * Reads an integer written in `base` 2 to 36 into a `bigint`: `fromBase('ff', 16)`
+ * is `255n`. An optional leading `-` or `+` is allowed and digits are case
+ * insensitive. Anything else (spaces, `_`, a `0x` prefix, a digit too large for
+ * the base, empty text) throws `NumberFormatError`.
+ */
+export declare function fromBase(text: string, base: number): bigint;
 /**
  * The n-th Fibonacci number (`F(0) = 0`, `F(1) = 1`) by fast doubling.
  * Always returns a `bigint`. `n` must be a non-negative safe integer at most

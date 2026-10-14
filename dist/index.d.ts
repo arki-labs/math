@@ -16,4 +16,7 @@ export * from './fluent.js';
 export * from './words.js';
 export * from './units.js';
 export * from './finance.js';
+export * from './geometry.js';
+export * from './complex.js';
+export * from './polynomial.js';
 //# sourceMappingURL=index.d.ts.map

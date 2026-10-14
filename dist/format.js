@@ -11,6 +11,13 @@ import { decimal, isDecimal } from './decimal.js';
 import { InvalidArgumentError, NumberFormatError, NumericRangeError, UnsupportedFeatureError } from './errors.js';
 import { assertFinite } from './number.js';
 const DEFAULT_LOCALE = 'en-US';
+/**
+ * Pass as `locale` to use the runtime's default locale instead of `'en-US'`.
+ * It is a word, not `undefined`, so a missing locale can never switch it on by accident.
+ */
+export const RUNTIME_LOCALE = 'default';
+/** `Intl` picks the runtime locale when none is given. */
+const intlLocale = (locale) => (locale === RUNTIME_LOCALE ? undefined : locale);
 const INTL_ROUNDING = {
     up: 'expand',
     down: 'trunc',
@@ -32,12 +39,13 @@ function getNumberFormat(locale, options) {
     if (cached)
         return cached;
     if (options.roundingMode !== undefined) {
-        const echoed = new Intl.NumberFormat(locale, { roundingMode: options.roundingMode }).resolvedOptions().roundingMode;
+        const echoed = new Intl.NumberFormat(intlLocale(locale), { roundingMode: options.roundingMode }).resolvedOptions()
+            .roundingMode;
         if (echoed !== options.roundingMode) {
             throw new UnsupportedFeatureError(`This runtime does not support Intl.NumberFormat roundingMode '${options.roundingMode}' (Intl.NumberFormat v3); use the default 'halfUp' rounding.`);
         }
     }
-    const created = new Intl.NumberFormat(locale, options);
+    const created = new Intl.NumberFormat(intlLocale(locale), options);
     if (formatterCache.size >= MAX_CACHE_ENTRIES)
         formatterCache.clear();
     formatterCache.set(key, created);
@@ -160,11 +168,20 @@ const percentOptions = (options) => ({
     ...baseOptions(options, { min: 0, max: 2 }),
     style: 'percent',
 });
-const compactOptions = (options) => ({
-    ...baseOptions(options, { min: 0, max: 1 }),
-    notation: 'compact',
-    compactDisplay: options.display ?? 'short',
-});
+const compactOptions = (options) => {
+    const intlOptions = {
+        ...baseOptions(options, { min: 0, max: 1 }),
+        notation: 'compact',
+        compactDisplay: options.display ?? 'short',
+    };
+    if (options.currency !== undefined) {
+        intlOptions.style = 'currency';
+        intlOptions.currency = options.currency;
+        if (options.currencyDisplay !== undefined)
+            intlOptions.currencyDisplay = options.currencyDisplay;
+    }
+    return intlOptions;
+};
 const currencyOptions = (currency, options) => {
     const intlOptions = { ...baseOptions(options), style: 'currency', currency };
     if (options.currencyDisplay !== undefined)
@@ -192,13 +209,17 @@ export function formatCurrency(value, currency, options = {}) {
 export function formatPercent(fraction, options = {}) {
     return run(fraction, options, percentOptions(options));
 }
-/** Short or long compact form: `formatCompact(1230000)` → `'1.2M'`. Default max 1 fraction digit. */
+/**
+ * Short or long compact form: `formatCompact(1230000)` → `'1.2M'`. Default max 1 fraction digit.
+ * With `currency` it is compact money: `formatCompact(1_250_000, { currency: 'USD' })` → `'$1.3M'`.
+ */
 export function formatCompact(value, options = {}) {
     return run(value, options, compactOptions(options));
 }
 const FILE_UNITS = {
     si: { base: 1000, labels: ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB'] },
     iec: { base: 1024, labels: ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'] },
+    jedec: { base: 1024, labels: ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'] },
 };
 /**
  * Human file size: `formatFileSize(1536)` → `'1.5 kB'`. Picks the largest unit
