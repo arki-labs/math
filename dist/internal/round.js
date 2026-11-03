@@ -5,15 +5,22 @@
  * right, so it handles every case the float fast path in `number.ts` cannot
  * prove, and it is the oracle the fast path is tested against.
  */
+import { NumericRangeError } from '../errors.js';
 import { divideRounded, pow10 } from './bigint.js';
-import { parseDecimalString } from './parse.js';
+import { decimalParts } from './parse.js';
 function noNegativeZero(value) {
     return value === 0 ? 0 : value;
+}
+/** The rounded value, or `NumericRangeError` when rounding up carried it past the largest double. */
+function finiteRounded(value, operation) {
+    if (!Number.isFinite(value))
+        throw new NumericRangeError(`${operation} rounds past the largest float`);
+    return noNegativeZero(value);
 }
 // The shortest text, not `partsFromNumber`: that guard stops `decimal(1e20)` from
 // pretending to be exact, but a float past 2^53 still rounds as the number you typed.
 function shortestParts(value) {
-    return parseDecimalString(String(value));
+    return decimalParts(String(value));
 }
 /** `round(x, places, mode)` on the shortest decimal text of `x`. Arguments are already validated. */
 export function roundExact(x, places, mode) {
@@ -21,13 +28,13 @@ export function roundExact(x, places, mode) {
     if (places >= scale)
         return noNegativeZero(x);
     const rounded = divideRounded(coefficient, pow10(scale - places), mode);
-    return noNegativeZero(Number(`${rounded}e${-places}`));
+    return finiteRounded(Number(`${rounded}e${-places}`), 'round');
 }
 /** `roundTo(x, step, mode)` on the shortest decimal text of both. Arguments are already validated. */
 export function roundToExact(x, step, mode) {
     const value = shortestParts(x);
     const unit = shortestParts(step);
     const multiple = divideRounded(value.coefficient * pow10(unit.scale), unit.coefficient * pow10(value.scale), mode);
-    return noNegativeZero(Number(`${multiple * unit.coefficient}e${-unit.scale}`));
+    return finiteRounded(Number(`${multiple * unit.coefficient}e${-unit.scale}`), 'roundTo');
 }
 //# sourceMappingURL=round.js.map

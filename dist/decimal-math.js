@@ -1,6 +1,6 @@
 /**
- * Roots, logarithms, exponentials and the constants π and e on `Decimal`,
- * to any number of fraction digits up to the package limits.
+ * Roots, logarithms and exponentials on `Decimal`. It also has the constants π and e, to any number of
+ * fraction digits up to the package limits.
  *
  * Every result is *correctly rounded*: the returned digits are exactly what
  * you get by rounding the true mathematical value to `scale` fraction digits
@@ -33,9 +33,9 @@
  */
 import { Decimal } from './decimal.js';
 import { DivisionByZeroError, InvalidArgumentError, ResourceLimitError, RoundingNecessaryError } from './errors.js';
-import { abs, digitCount, divideRounded, gcd, pow10 } from './internal/bigint.js';
+import { abs, digitCount, divideRounded, gcd, multiplyChecked, pow10, timesPow10 } from './internal/bigint.js';
 import { assertScale } from './internal/fraction.js';
-import { MAX_DIGITS } from './internal/limits.js';
+import { assertIntermediateDigits, MAX_DIGITS, MAX_INTEGER_DIGITS } from './internal/limits.js';
 import { assertRadicandSize, integerRoot, rootAt } from './internal/roots.js';
 /** Guard digits on the first attempt. */
 const GUARD_DIGITS = 10;
@@ -48,7 +48,7 @@ const MAX_GUARD_DIGITS = 2560;
  */
 const ERROR_BOUND = 2n;
 /** Largest power built while checking whether a logarithm is exact, in digits. */
-const MAX_EXACT_CHECK_DIGITS = 4 * MAX_DIGITS;
+const MAX_EXACT_CHECK_DIGITS = MAX_INTEGER_DIGITS / 2;
 // Frozen: `exp(0, { scale: 0 })` and `pow(1, …)` can return it.
 const ONE = Object.freeze(Decimal.from(1));
 function zeroAt(scale) {
@@ -161,7 +161,7 @@ function exactRoot(x, n) {
     const magnitude = abs(x.coefficient);
     const paddedScale = Math.ceil(x.scale / n) * n;
     assertRadicandSize(digitCount(magnitude) + paddedScale - x.scale);
-    const radicand = magnitude * pow10(paddedScale - x.scale);
+    const radicand = timesPow10(magnitude, paddedScale - x.scale, 'The root');
     const root = integerRoot(radicand, n);
     if (root ** BigInt(n) !== radicand)
         return undefined;
@@ -200,7 +200,8 @@ function rootOf(value, n, options, name) {
  */
 function cachedConstant(cache, precision, compute) {
     if (cache.digits < precision) {
-        const digits = Math.max(precision, Math.ceil(cache.digits * 1.5));
+        // The 1.5x growth stops short of the bigint ceiling: `10^digits` is built at that size.
+        const digits = Math.max(precision, Math.min(Math.ceil(cache.digits * 1.5), MAX_INTEGER_DIGITS - 100));
         const guard = 10 + String(digits).length;
         cache.value = compute(digits + guard) / pow10(guard);
         cache.digits = digits;
@@ -282,6 +283,8 @@ function lnFixed(x, precision) {
     // Headroom for the series' rounding errors and for |k| × the error of ln 10.
     const extra = 10 + digitCount(BigInt(Math.abs(exponent) + 1)) + String(precision).length;
     const q = precision + extra;
+    // The series squares z and multiplies by `one`: two q-digit factors.
+    assertIntermediateDigits(2 * q + 2, 'ln');
     const one = pow10(q);
     const shift = q - (digits - 1);
     const m = shift >= 0 ? x.coefficient * pow10(shift) : x.coefficient / pow10(-shift);
@@ -318,7 +321,7 @@ function lnSmallnessDigits(b) {
 /** log_b(x) within 1.01 units at `precision`. */
 function logFixed(x, b, precision) {
     const q = precision + lnMagnitudeDigits(x) + 2 * lnSmallnessDigits(b) + 3;
-    return (lnFixed(x, q) * pow10(precision)) / lnFixed(b, q);
+    return timesPow10(lnFixed(x, q), precision, 'log') / lnFixed(b, q);
 }
 /**
  * e^v for v = coefficient × 10^-scale, within 1 unit at `precision`, assuming
@@ -337,7 +340,11 @@ function expFixed(coefficient, scale, precision) {
     // Squaring h times multiplies the relative error by 2^h.
     const guard = 8 + Math.ceil(halvings * 0.302) + String(precision).length;
     const q = precision + integerDigits + guard;
+    // The series and the squarings multiply two q-digit values; the start scales the input by `one`.
+    assertIntermediateDigits(Math.max(2 * q + 2, digitCount(magnitude) + q + 1, q + precision + 1), 'exp');
     const one = pow10(q);
+    // `halvings` is a few hundred at most (the integer bits of a double plus 1.8·√precision), far below the
+    // 60,000-bit shift ceiling.
     const y = (magnitude * one) / (pow10(scale) << BigInt(halvings));
     let term = y;
     let sum = one + y;
@@ -425,7 +432,7 @@ export function cbrt(value, options) {
  * `sqrt` (scale padded up to a multiple of n, then divided by n):
  * `nthRoot('1024', 10)` → `2`. Even roots of negative values throw
  * `InvalidArgumentError`; odd roots keep the sign. Intermediates are capped at
- * 200 000 digits (`ResourceLimitError`), which bounds `n × scale`.
+ * 18 000 digits (`ResourceLimitError`), which bounds `n × scale`.
  */
 export function nthRoot(value, n, options) {
     return rootOf(value, n, options, 'nthRoot');
@@ -555,7 +562,8 @@ export function pow(base, exponent, options) {
  * of a result within the limits — its decimal expansion is longer than
  * `scale + 1` digits — so the logarithmic path rounds it, and Ziv's loop ends.
  */
-const MAX_EXACT_POWER_DIGITS = 5 * MAX_DIGITS;
+// The exact power is rescaled by up to 10^MAX_DIGITS, so it may fill what is left under the bigint ceiling.
+const MAX_EXACT_POWER_DIGITS = MAX_INTEGER_DIGITS - MAX_DIGITS;
 /**
  * `base^n` for an integer n of any size. Without options it is exact
  * (`Decimal#pow`, whose limits apply). With options only the rounded result
@@ -620,7 +628,7 @@ function powApproximation(x, y, log10Result) {
         // t = y·ln(x) to `exponentPrecision` digits: an error δ in t is a relative error δ in the result.
         const exponentPrecision = precision + integerDigits + 10;
         const lnBase = lnFixed(x, exponentPrecision + exponentDigits);
-        const t = (y.coefficient * lnBase) / pow10(y.scale + exponentDigits);
+        const t = multiplyChecked(y.coefficient, lnBase, 'pow') / pow10(y.scale + exponentDigits);
         return expFixed(t, exponentPrecision, precision);
     };
 }

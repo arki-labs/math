@@ -1,6 +1,6 @@
 /**
- * Definite integrals of a function of one real variable,
- * `f: (x: number) => number`, over finite or infinite intervals, on float64.
+ * Definite integrals of a one-variable function. The function is `f: (x: number) => number`, the
+ * interval finite or infinite, and the arithmetic float64.
  *
  * **Methods.** `integrate(f, [a, b])` picks one with `{ method }`:
  * - `'gaussKronrod'` (the default) is globally adaptive Gauss–Kronrod
@@ -56,13 +56,15 @@
  *   `NumericRangeError` naming the point (a non-integrable singularity usually
  *   ends this way), as does a sum that overflows;
  * - missing the tolerance within `maxEvaluations`, or a Gauss–Kronrod
- *   sub-interval too narrow to bisect, throws `IntegrationConvergenceError`, a
- *   `ConvergenceError` whose `best` field holds the best value and error
- *   estimate reached, so a caller that can live with less accuracy can still
- *   use it on purpose;
+ *   sub-interval too narrow to bisect, returns `NotConverged`
+ *   (`math.not_converged`): valid input that does not settle is a result, not a
+ *   bug. Its `cause` is an `IntegrationConvergenceError` whose `best` field
+ *   holds the best value and error estimate reached, so a caller that can live
+ *   with less accuracy can still use it on purpose;
  * - `NaN` bounds, equal infinite bounds or bad options throw
  *   `InvalidArgumentError`.
  */
+import type { NotConvergedFailure } from './errors.js';
 import type { RealFunction } from './internal/calculus.js';
 import { ConvergenceError } from './errors.js';
 export type { RealFunction } from './internal/calculus.js';
@@ -100,5 +102,5 @@ export declare class IntegrationConvergenceError extends ConvergenceError {
  * integrate(x => 1 / Math.sqrt(x), [0, 1], { method: 'tanhSinh' }).value; // 2
  * integrate(x => Math.exp(-x * x), [0, Infinity]).value; // 0.886226925452758 (√π/2)
  */
-export declare function integrate(f: RealFunction, bounds: readonly [number, number], options?: IntegrateOptions): IntegrationResult;
+export declare function integrate(f: RealFunction, bounds: readonly [number, number], options?: IntegrateOptions): IntegrationResult | NotConvergedFailure;
 //# sourceMappingURL=integrate.d.ts.map

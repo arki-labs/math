@@ -1,8 +1,7 @@
 /**
- * Lean dense linear algebra over plain JS numbers (float64): vectors, small to
- * medium matrices, LU with partial pivoting, QR with column pivoting,
- * Cholesky, the singular value decomposition, least squares, eigenvalues and
- * eigenvectors. For symbolic algebra or sparse storage, reach for a full CAS
+ * Dense linear algebra over plain float64 numbers. It has vectors, small to medium matrices, LU with
+ * partial pivoting, QR with column pivoting, Cholesky, the singular value decomposition, least squares,
+ * eigenvalues and eigenvectors. For symbolic algebra or sparse storage, reach for a full CAS
  * such as mathjs.
  *
  * **Representation.** Vectors are `readonly number[]` and matrices are
@@ -48,8 +47,8 @@
  * number. Column pivoting reveals rank on all but contrived inputs (Kahan's
  * matrix defeats it); the SVD never misses. `conditionNumber` is `σ₁ / σₖ`;
  * `pseudoInverse` is `V·Σ⁺·Uᵀ`. The SVD's QR iteration is capped at 75 sweeps
- * per singular value (typically 2 or 3 are needed); past the cap it throws
- * `ConvergenceError`. Like the eigen routines, all of these work on a copy
+ * per singular value (typically 2 or 3 are needed); past the cap it returns
+ * `NotConverged`. Like the eigen routines, all of these work on a copy
  * scaled by a power of two, so entries near the float64 limits neither
  * overflow nor underflow.
  *
@@ -84,8 +83,10 @@
  * complex pair, as in every float library; their eigenvectors are then nearly
  * parallel. The QR iteration is capped (30 sweeps per eigenvalue for the
  * symmetric case, `30 · max(10, n)` per eigenvalue for the general case, with
- * exceptional shifts at 10 and 30); past the cap it throws `ConvergenceError`.
+ * exceptional shifts at 10 and 30); past the cap it returns `NotConverged`
+ * (`math.not_converged`, with the `ConvergenceError` and its sweep count as `cause`).
  */
+import type { NotConvergedFailure } from './errors.js';
 import { Complex } from './complex.js';
 /** A vector: a non-empty array of finite numbers. */
 export type Vector = readonly number[];
@@ -211,7 +212,7 @@ export type RankOptions = ToleranceOptions & {
  * `max(m, n) · Number.EPSILON · ‖A‖∞` instead. `{ tolerance }` replaces the
  * default with an absolute threshold for whichever quantity is counted.
  */
-export declare function rank(a: Matrix, options?: RankOptions): number;
+export declare function rank(a: Matrix, options?: RankOptions): number | NotConvergedFailure;
 /** Options for the symmetric eigen solvers. */
 export type SymmetryOptions = {
     /**
@@ -238,26 +239,26 @@ export type EigenDecomposition = {
 /**
  * The eigenvalues of a symmetric matrix, ascending, repeated by multiplicity.
  * Throws `InvalidArgumentError` when `A` is not symmetric within the tolerance
- * (see the module docs, or pass `{ tolerance }`), and `ConvergenceError` if
+ * (see the module docs, or pass `{ tolerance }`), and returns `NotConverged` if
  * the QL iteration stalls. Faster than `symmetricEigenDecompose`: no
  * eigenvectors are accumulated.
  */
-export declare function symmetricEigenvalues(a: Matrix, options?: SymmetryOptions): number[];
+export declare function symmetricEigenvalues(a: Matrix, options?: SymmetryOptions): number[] | NotConvergedFailure;
 /**
  * Eigenvalues and orthonormal eigenvectors of a symmetric matrix, so that
  * `A = V·Λ·Vᵀ` with `V = transpose(vectors)`. Values ascend; `vectors[k]`
  * belongs to `values[k]`, has unit length, and its largest-magnitude entry is
  * positive. Throws like `symmetricEigenvalues`.
  */
-export declare function symmetricEigenDecompose(a: Matrix, options?: SymmetryOptions): SymmetricEigenDecomposition;
+export declare function symmetricEigenDecompose(a: Matrix, options?: SymmetryOptions): SymmetricEigenDecomposition | NotConvergedFailure;
 /**
  * The eigenvalues of any real square matrix, as `Complex` values sorted by
  * real part, then imaginary part, repeated by multiplicity. A real eigenvalue
  * has an imaginary part of exactly `0`; complex ones come in conjugate pairs.
  * For a symmetric matrix, `symmetricEigenvalues` is faster and returns plain
- * numbers. Throws `ConvergenceError` if the QR iteration stalls.
+ * numbers. Returns `NotConverged` if the QR iteration stalls.
  */
-export declare function eigenvalues(a: Matrix): Complex[];
+export declare function eigenvalues(a: Matrix): Complex[] | NotConvergedFailure;
 /**
  * Eigenvalues and eigenvectors of any real square matrix: `A·v = λ·v` for
  * `λ = values[k]`, `v = vectors[k]`. Values are sorted as in `eigenvalues`.
@@ -265,9 +266,9 @@ export declare function eigenvalues(a: Matrix): Complex[];
  * positive; a real eigenvalue's vector has real entries, and conjugate
  * eigenvalues have conjugate vectors. For a defective matrix the vectors of a
  * repeated eigenvalue are (nearly) parallel: there is no full basis to find.
- * Throws `ConvergenceError` if the QR iteration stalls.
+ * Returns `NotConverged` if the QR iteration stalls.
  */
-export declare function eigenDecompose(a: Matrix): EigenDecomposition;
+export declare function eigenDecompose(a: Matrix): EigenDecomposition | NotConvergedFailure;
 /** Options for `qrDecompose`. */
 export type QrOptions = ToleranceOptions & {
     /**
@@ -340,11 +341,11 @@ export declare function choleskySolve(a: Matrix, b: Matrix, options?: ToleranceO
  * The singular values of any `m×n` matrix: `min(m, n)` of them, descending,
  * all `≥ 0` (the square roots of the eigenvalues of `AᵀA`, computed without
  * forming it). Golub–Kahan–Reinsch: backward stable, so each value is within
- * about `max(m, n) · ε · σ₁` of the exact one. Throws `ConvergenceError` if
+ * about `max(m, n) · ε · σ₁` of the exact one. Returns `NotConverged` if
  * the QR iteration stalls (see the module docs). Faster than
  * `singularValueDecompose`: no singular vectors are accumulated.
  */
-export declare function singularValues(a: Matrix): number[];
+export declare function singularValues(a: Matrix): number[] | NotConvergedFailure;
 /**
  * `A = U·Σ·Vᵀ` for any `m×n` matrix, in thin form: `values` holds the
  * `k = min(m, n)` singular values, descending; `left[k]` and `right[k]` are the
@@ -353,7 +354,7 @@ export declare function singularValues(a: Matrix): number[];
  * largest-magnitude entry of `left[k]` (the first, on a tie) is positive.
  * Throws like `singularValues`.
  */
-export declare function singularValueDecompose(a: Matrix): SingularValueDecomposition;
+export declare function singularValueDecompose(a: Matrix): SingularValueDecomposition | NotConvergedFailure;
 /**
  * The 2-norm condition number `σ₁ / σₖ` (largest over smallest singular
  * value) of any `m×n` matrix: about how many times a relative error in `A` or
@@ -363,7 +364,7 @@ export declare function singularValueDecompose(a: Matrix): SingularValueDecompos
  * that returns a non-finite number, since the condition number of a singular
  * matrix is infinite by definition.
  */
-export declare function conditionNumber(a: Matrix): number;
+export declare function conditionNumber(a: Matrix): number | NotConvergedFailure;
 /**
  * The Moore–Penrose pseudo-inverse `A⁺` (`n×m` for an `m×n` matrix) from the
  * SVD: `V·Σ⁺·Uᵀ`, where `Σ⁺` inverts the singular values above
@@ -372,7 +373,7 @@ export declare function conditionNumber(a: Matrix): number;
  * minimum-norm least-squares solution, but `leastSquares` computes that faster
  * and more accurately.
  */
-export declare function pseudoInverse(a: Matrix, options?: ToleranceOptions): number[][];
+export declare function pseudoInverse(a: Matrix, options?: ToleranceOptions): number[][] | NotConvergedFailure;
 /**
  * The least-squares solution of `A·x ≈ b` for any `m×n` matrix: the `x` that
  * minimizes `‖A·x − b‖₂`. `b` is a vector (gives `x`, length `n`) or a matrix
@@ -388,6 +389,6 @@ export declare function pseudoInverse(a: Matrix, options?: ToleranceOptions): nu
  * `max(m, n) · Number.EPSILON · σ₁` (or `{ tolerance }`). Never throws for a
  * singular or rank-deficient `A`.
  */
-export declare function leastSquares(a: Matrix, b: Vector, options?: ToleranceOptions): number[];
-export declare function leastSquares(a: Matrix, b: Matrix, options?: ToleranceOptions): number[][];
+export declare function leastSquares(a: Matrix, b: Vector, options?: ToleranceOptions): number[] | NotConvergedFailure;
+export declare function leastSquares(a: Matrix, b: Matrix, options?: ToleranceOptions): number[][] | NotConvergedFailure;
 //# sourceMappingURL=linear-algebra.d.ts.map

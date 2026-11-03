@@ -1,6 +1,6 @@
 /**
- * Numerical derivatives and limits of a function of one real variable,
- * `f: (x: number) => number`, by Richardson extrapolation on float64.
+ * Numerical derivatives and limits of a one-variable function. The function is
+ * `f: (x: number) => number`, and the method is Richardson extrapolation on float64.
  *
  * Both functions return **numerical estimates with an error estimate**, never
  * proofs. They sample `f` at a shrinking sequence of steps and extrapolate the
@@ -35,12 +35,13 @@
  *
  * **Tolerance and failures.** An estimate is accepted when `errorEstimate ≤
  * max(absoluteTolerance, relativeTolerance · |value|)`, defaults `1e-10` and
- * `1e-8`. Otherwise `ExtrapolationConvergenceError` (a `ConvergenceError`)
- * is thrown with the best estimate in `best`; so are one-sided limits that
- * disagree. `f` returning `NaN` or `±Infinity` at a sample point throws
+ * `1e-8`. Otherwise the call returns `NotConverged`
+ * (`math.not_converged`) whose `cause` is an `ExtrapolationConvergenceError`
+ * with the best estimate in `best`; so do one-sided limits that disagree. `f` returning `NaN` or `±Infinity` at a sample point throws
  * `NumericRangeError` naming the point; bad arguments throw
  * `InvalidArgumentError`. Results are `{ value, errorEstimate, evaluations }`.
  */
+import type { NotConvergedFailure } from './errors.js';
 import type { RealFunction } from './internal/calculus.js';
 import { ConvergenceError } from './errors.js';
 export type { RealFunction } from './internal/calculus.js';
@@ -76,7 +77,7 @@ export declare class ExtrapolationConvergenceError extends ConvergenceError {
  * @example
  * derivative(Math.exp, 1).value; // 2.718281828459045 (to about 1e-12)
  */
-export declare function derivative(f: RealFunction, x: number, options?: ExtrapolationOptions): ExtrapolationResult;
+export declare function derivative(f: RealFunction, x: number, options?: ExtrapolationOptions): ExtrapolationResult | NotConvergedFailure;
 /**
  * `lim f(x)` as `x → x0`, by Richardson extrapolation of `f(x0 ± h)`. A
  * numerical estimate, not a proof that the limit exists.
@@ -85,5 +86,5 @@ export declare function derivative(f: RealFunction, x: number, options?: Extrapo
  * limit(x => Math.sin(x) / x, 0).value; // 1
  * limit(x => (1 + 1 / x) ** x, Infinity).value; // 2.718281828… (to about 1e-9)
  */
-export declare function limit(f: RealFunction, x0: number, options?: LimitOptions): ExtrapolationResult;
+export declare function limit(f: RealFunction, x0: number, options?: LimitOptions): ExtrapolationResult | NotConvergedFailure;
 //# sourceMappingURL=differentiate.d.ts.map

@@ -9,6 +9,7 @@
  */
 import type { Decimal } from './decimal.js';
 import type { RoundingMode } from './rounding.js';
+import type { InvalidCurrencyFailure } from './errors.js';
 /** A formattable value. A string must be a number in plain decimal syntax (`'-1234.50'`). */
 export type FormatValue = number | bigint | Decimal | string;
 export type FormatOptions = {
@@ -60,8 +61,9 @@ export declare function formatNumber(value: FormatValue, options?: FormatOptions
 /**
  * Formats money. Fraction digits come from the currency (2 for USD, 0 for JPY)
  * unless overridden: `formatCurrency(1234.5, 'EUR', { locale: 'de-DE' })` → `'1.234,50 €'`.
+ * A currency code that is not three ASCII letters returns `InvalidCurrency` (`math.invalid_currency`).
  */
-export declare function formatCurrency(value: FormatValue, currency: string, options?: CurrencyOptions): string;
+export declare function formatCurrency(value: FormatValue, currency: string, options?: CurrencyOptions): string | InvalidCurrencyFailure;
 /**
  * Formats a FRACTION as a percent. The input is a fraction, NOT a percentage:
  * `formatPercent(0.125)` → `'12.5%'`, while `formatPercent(12.5)` → `'1,250%'`.
@@ -70,9 +72,13 @@ export declare function formatCurrency(value: FormatValue, currency: string, opt
 export declare function formatPercent(fraction: FormatValue, options?: FormatOptions): string;
 /**
  * Short or long compact form: `formatCompact(1230000)` → `'1.2M'`. Default max 1 fraction digit.
- * With `currency` it is compact money: `formatCompact(1_250_000, { currency: 'USD' })` → `'$1.3M'`.
+ * With `currency` it is compact money: `formatCompact(1_250_000, { currency: 'USD' })` → `'$1.3M'`,
+ * and a malformed currency code returns `InvalidCurrency`.
  */
-export declare function formatCompact(value: FormatValue, options?: CompactOptions): string;
+export declare function formatCompact(value: FormatValue, options?: CompactOptions & {
+    currency?: undefined;
+}): string;
+export declare function formatCompact(value: FormatValue, options: CompactOptions): string | InvalidCurrencyFailure;
 /**
  * Human file size: `formatFileSize(1536)` → `'1.5 kB'`. Picks the largest unit
  * where the value is at least 1. The number part is locale-aware; the unit label
@@ -84,12 +90,16 @@ export declare function formatFileSize(bytes: number | bigint, options?: FileSiz
 export type Formatter = {
     formatNumber(value: FormatValue, options?: FormatOptions): string;
     formatPercent(value: FormatValue, options?: FormatOptions): string;
-    formatCompact(value: FormatValue, options?: CompactOptions): string;
+    formatCompact(value: FormatValue, options?: CompactOptions & {
+        currency?: undefined;
+    }): string;
+    /** With `currency` the result is compact money, and a malformed code returns `InvalidCurrency`. */
+    formatCompact(value: FormatValue, options: CompactOptions): string | InvalidCurrencyFailure;
     formatFileSize(bytes: number | bigint, options?: FileSizeOptions): string;
-    /** Uses the bound currency. */
-    formatCurrency(value: FormatValue, options?: CurrencyOptions): string;
-    /** An explicit currency overrides the bound one. */
-    formatCurrency(value: FormatValue, currency: string, options?: CurrencyOptions): string;
+    /** Uses the bound currency. A malformed code returns `InvalidCurrency`. */
+    formatCurrency(value: FormatValue, options?: CurrencyOptions): string | InvalidCurrencyFailure;
+    /** An explicit currency overrides the bound one. A malformed code returns `InvalidCurrency`. */
+    formatCurrency(value: FormatValue, currency: string, options?: CurrencyOptions): string | InvalidCurrencyFailure;
 };
 /**
  * Binds a default locale (and optionally a currency) once. The defaults are

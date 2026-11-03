@@ -14,6 +14,7 @@
  * Root finders return a tagged result so callers know at compile time whether
  * they got real numbers or `Complex` values: check `kind` first.
  */
+import type { NotConvergedFailure } from './errors.js';
 import { Complex } from './complex.js';
 /** Coefficients, highest degree first. */
 export type Coefficients = readonly number[];
@@ -93,7 +94,10 @@ export declare function cubicRoots(a: number, b: number, c: number, d: number): 
  * `1e-14 × |z|` is set to exactly 0, so real roots report `isReal()`.
  *
  * A constant has no roots (`[]`); the zero polynomial throws, because every
- * number is a root.
+ * number is a root. A degree past 500 throws `ResourceLimitError` (the cost
+ * grows with the square of the degree). A polynomial whose iteration does not
+ * settle in 500 rounds returns `NotConverged`; a root that overflows the float
+ * range throws `NumericRangeError`.
  */
-export declare function polynomialRoots(coefficients: Coefficients): Complex[];
+export declare function polynomialRoots(coefficients: Coefficients): Complex[] | NotConvergedFailure;
 //# sourceMappingURL=polynomial.d.ts.map

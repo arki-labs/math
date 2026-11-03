@@ -1,7 +1,7 @@
 {
   "name": "@arki/math",
-  "version": "0.0.10",
-  "description": "Zero-dependency math toolkit — exact Decimal and Rational arithmetic on bigint, explicit rounding modes, float helpers that round what you typed, descriptive statistics, Intl-backed locale formatting and parsing, seeded random, and a fluent number wrapper.",
+  "version": "0.2.0",
+  "description": "Math toolkit — exact Decimal and Rational arithmetic on bigint, explicit rounding modes, float helpers that round what you typed, descriptive statistics, Intl-backed locale formatting and parsing, seeded random, and a fluent number wrapper.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -107,10 +107,30 @@
       "import": "./dist/words.js",
       "default": "./dist/words.js"
     },
-    "./words/*": {
-      "types": "./dist/words/*.d.ts",
-      "import": "./dist/words/*.js",
-      "default": "./dist/words/*.js"
+    "./words/de": {
+      "types": "./dist/words/de.d.ts",
+      "import": "./dist/words/de.js",
+      "default": "./dist/words/de.js"
+    },
+    "./words/es": {
+      "types": "./dist/words/es.d.ts",
+      "import": "./dist/words/es.js",
+      "default": "./dist/words/es.js"
+    },
+    "./words/fr": {
+      "types": "./dist/words/fr.d.ts",
+      "import": "./dist/words/fr.js",
+      "default": "./dist/words/fr.js"
+    },
+    "./words/it": {
+      "types": "./dist/words/it.d.ts",
+      "import": "./dist/words/it.js",
+      "default": "./dist/words/it.js"
+    },
+    "./words/ro": {
+      "types": "./dist/words/ro.d.ts",
+      "import": "./dist/words/ro.js",
+      "default": "./dist/words/ro.js"
     },
     "./units": {
       "types": "./dist/units.d.ts",
@@ -161,9 +181,15 @@
     "!src/**/*.spec.*",
     "!src/**/__tests__/**",
     "README.md",
+    "docs/**",
+    "llms.txt",
     "LICENSE",
     "package.json"
   ],
+  "dependencies": {
+    "@arki/failure": "0.3.0",
+    "@arki/log": "0.4.0"
+  },
   "publishConfig": {
     "access": "public"
   }

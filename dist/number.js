@@ -5,9 +5,10 @@
  * Every input must be finite; `NaN` and `±Infinity` throw rather than spread.
  * Results never carry `-0`.
  */
-import { InvalidArgumentError, NumberFormatError, NumericRangeError, ResourceLimitError } from './errors.js';
+import { InvalidArgumentError, InvalidNumber, NumberOutOfRange, NumericRangeError, ResourceLimitError, } from './errors.js';
 import { abs, digitCount, divideRounded, pow10 } from './internal/bigint.js';
-import { parseDecimalString } from './internal/parse.js';
+import { exceedsDigitLimit } from './internal/limits.js';
+import { decimalParts } from './internal/parse.js';
 import { roundExact, roundToExact } from './internal/round.js';
 /** @internal Shared argument guard; not part of the public API. */
 export function assertFinite(value, name) {
@@ -275,7 +276,7 @@ export function roundToSignificant(x, digits, mode = 'halfUp') {
     if (x === 0)
         return 0;
     // The shortest text, not `partsFromNumber`: past 2^53 its digits are still the number you typed.
-    const { coefficient, scale } = parseDecimalString(String(x));
+    const { coefficient, scale } = decimalParts(String(x));
     const drop = digitCount(abs(coefficient)) - digits;
     if (drop <= 0)
         return x;
@@ -286,26 +287,29 @@ export function roundToSignificant(x, digits, mode = 'halfUp') {
     return noNegativeZero(result);
 }
 const PLAIN_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
-/**
- * Counts the significant figures in a written number by the textbook rules:
- * leading zeros never count, zeros between digits always count, and trailing
- * zeros count only when there is a decimal point.
- * `'1200'` → 2, `'1200.'` → 4, `'0.00120'` → 3, `'1.20e3'` → 3. The exponent
- * is ignored. Zero counts its written zeros after the point (`'0'` → 1, `'0.00'` → 2).
- * Pass the text (or a `Decimal`, whose scale is its written precision):
- * a JS number cannot tell `1.20` from `1.2`. Anything else throws `NumberFormatError`.
- */
 export function significantDigits(value) {
     const text = typeof value === 'string' ? value.trim() : value.toString();
     if (!PLAIN_NUMBER.test(text))
-        throw new NumberFormatError(`"${text}" is not a plain decimal number`);
-    const mantissa = text.replace(/^[+-]/, '').split(/e/i)[0] ?? '';
+        return InvalidNumber();
+    const exponentAt = text.search(/e/i);
+    const sign = text.startsWith('+') || text.startsWith('-') ? 1 : 0;
+    const mantissa = text.slice(sign, exponentAt === -1 ? text.length : exponentAt);
+    if (exceedsDigitLimit(mantissa.length))
+        return NumberOutOfRange();
     const point = mantissa.indexOf('.');
-    const digits = mantissa.replace('.', '');
-    const significant = digits.replace(/^0+/, '');
-    if (significant === '')
+    const digits = point === -1 ? mantissa : mantissa.slice(0, point) + mantissa.slice(point + 1);
+    // Scans, not `/^0+/` and `/0+$/`: a regex with a `$` alternative is quadratic on a long run of zeros.
+    let first = 0;
+    while (first < digits.length && digits[first] === '0')
+        first++;
+    if (first === digits.length)
         return point === -1 ? 1 : Math.max(1, mantissa.length - point - 1);
-    return point === -1 ? significant.replace(/0+$/, '').length : significant.length;
+    if (point !== -1)
+        return digits.length - first;
+    let last = digits.length;
+    while (digits[last - 1] === '0')
+        last--;
+    return last - first;
 }
 /**
  * Tolerant equality for floats. `tolerance` is relative to the larger

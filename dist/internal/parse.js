@@ -1,6 +1,6 @@
-import { NumberFormatError, NumericRangeError } from '../errors.js';
+import { InvalidNumber, NumberFormatError, NumberOutOfRange, NumericRangeError, ResourceLimitError, } from '../errors.js';
 import { digitCount, pow10 } from './bigint.js';
-import { assertDigitLimit, assertScaleLimit } from './limits.js';
+import { assertDigitLimit, exceedsDigitLimit, exceedsScaleLimit, MAX_DIGITS, MAX_SCALE } from './limits.js';
 const EXPONENT_SYNTAX = /^[+-]?\d+$/;
 /** Digits a JS number holds exactly (every 15-digit integer is below 2^53). */
 const EXACT_NUMBER_DIGITS = 15;
@@ -11,13 +11,12 @@ function isDigit(code) {
 function digitAt(input, index) {
     return (input.codePointAt(index) ?? 48) - 48;
 }
-function notADecimal(input) {
-    return new NumberFormatError(`"${input}" is not a decimal number`);
-}
 /**
  * Strict ASCII decimal syntax: optional sign, digits, optional fraction,
  * optional exponent. No whitespace, grouping, localized separators, hex,
- * `Infinity` or `NaN` — those belong to `@arki/math/parse`.
+ * `Infinity` or `NaN` — those belong to `@arki/math/parse`. Returns
+ * `InvalidNumber` for other text and `NumberOutOfRange` past the digit or
+ * scale limit; builders go through {@link decimalParts}, which throws.
  */
 export function parseDecimalString(input) {
     // One scan over the characters: [sign] digits [. digits] [e|E [sign] digits].
@@ -45,16 +44,16 @@ export function parseDecimalString(input) {
         const marker = input.codePointAt(index);
         const exponentText = input.slice(index + 1);
         const isExponentMarker = marker === 101 /* e */ || marker === 69; /* E */
-        if (!isExponentMarker || !EXPONENT_SYNTAX.test(exponentText)) {
-            throw notADecimal(input);
-        }
+        if (!isExponentMarker || !EXPONENT_SYNTAX.test(exponentText))
+            return InvalidNumber();
         if (integerDigits + fractionDigits === 0)
-            throw notADecimal(input);
+            return InvalidNumber();
         exponent = Number(exponentText);
-        assertScaleLimit(exponent, 'Exponent');
+        if (exceedsScaleLimit(exponent))
+            return NumberOutOfRange();
     }
     else if (integerDigits + fractionDigits === 0) {
-        throw notADecimal(input);
+        return InvalidNumber();
     }
     // Leading zeros carry no value. Only the coefficient's digits count, the rule every
     // result obeys, so a scale-10 000 value below 1 parses back from its own toString().
@@ -69,9 +68,11 @@ export function parseDecimalString(input) {
     const significantDigits = integerEnd - integerFrom + (fractionEnd - fractionFrom);
     // A positive exponent beyond the fraction digits pads a non-zero coefficient with zeros; count those too.
     const paddedDigits = significantDigits === 0 ? 0 : Math.max(0, exponent - fractionDigits);
-    assertDigitLimit(significantDigits + paddedDigits, `"${input.slice(0, 20)}…"`);
+    if (exceedsDigitLimit(significantDigits + paddedDigits))
+        return NumberOutOfRange();
     let scale = fractionDigits - exponent;
-    assertScaleLimit(scale, 'Scale');
+    if (exceedsScaleLimit(scale))
+        return NumberOutOfRange();
     let coefficient;
     if (significantDigits <= EXACT_NUMBER_DIGITS) {
         // Short coefficients are built exactly as a number: much cheaper than BigInt(text).
@@ -91,7 +92,18 @@ export function parseDecimalString(input) {
         coefficient *= pow10(-scale);
         scale = 0;
     }
-    return { coefficient, scale };
+    const parts = { coefficient, scale };
+    return parts;
+}
+/** The builders' strict parse: {@link parseDecimalString}, with its failures thrown as the errors builders document. */
+export function decimalParts(input) {
+    const parts = parseDecimalString(input);
+    if (InvalidNumber.is(parts))
+        throw new NumberFormatError(`"${input}" is not a decimal number`);
+    if (NumberOutOfRange.is(parts)) {
+        throw new ResourceLimitError(`"${input.slice(0, 20)}…" is past the limit of ${MAX_DIGITS} digits or an exponent and scale of ±${MAX_SCALE}`);
+    }
+    return parts;
 }
 /**
  * A JS number is read through its shortest decimal spelling, so
@@ -105,7 +117,7 @@ export function partsFromNumber(value) {
     if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
         throw new NumericRangeError(`${value} is not a safe integer; its digits are already lost. Pass a string or bigint instead`);
     }
-    return parseDecimalString(value === 0 ? '0' : String(value));
+    return decimalParts(value === 0 ? '0' : String(value));
 }
 export function partsFromBigInt(value) {
     assertDigitLimit(digitCount(value), 'bigint input');

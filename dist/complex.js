@@ -41,9 +41,11 @@
  * that format with or without spaces around the middle sign (`3+4i`), and
  * rejects anything else (`i4`, `3 + -4i`, `NaN`, `Infinity`, `3+4j`).
  */
-import { DivisionByZeroError, InvalidArgumentError, NumberFormatError, NumericRangeError } from './errors.js';
+import { DivisionByZeroError, InvalidArgumentError, InvalidNumber, NumberFormatError, NumberOutOfRange, NumericRangeError, ResourceLimitError, } from './errors.js';
 import { assertFinite } from './number.js';
 const BRAND = Symbol('arki.math.complex');
+/** Most roots `nthRoots` builds: each is an object, so a huge `n` would exhaust memory before it finished. */
+const MAX_NTH_ROOTS = 1_000_000;
 function refuseCoercion() {
     throw new TypeError('A Complex cannot be used as a number. Read .re / .im, or use .plus()/.times()/... for complex arithmetic');
 }
@@ -244,7 +246,12 @@ const NUMBER = String.raw `(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+|E[+-]?\d+)?`;
 const REAL_ONLY = new RegExp(String.raw `^([+-]?${NUMBER})$`);
 const IMAGINARY_ONLY = new RegExp(String.raw `^([+-]?)(${NUMBER})?i$`);
 const BOTH = new RegExp(String.raw `^([+-]?${NUMBER})\s*([+-])\s*(${NUMBER})?i$`);
-function parseComplex(input) {
+/**
+ * Reads complex-number text such as `'3+4i'`, `'-2i'` or `'5'`, for outside
+ * text. Returns `InvalidNumber` for other text and `NumberOutOfRange` when a
+ * part is outside the float range. `complex('3+4i')` is the builder and throws.
+ */
+export function parseComplex(input) {
     const text = input.trim();
     let re = '0';
     let im = '0';
@@ -260,13 +267,12 @@ function parseComplex(input) {
         im = `${match[2] ?? '+'}${match[3] ?? '1'}`;
     }
     else {
-        throw new NumberFormatError(`"${input}" is not a complex number (expected forms like 3+4i, -2i, 5)`);
+        return InvalidNumber();
     }
     const reValue = Number(re);
     const imValue = Number(im);
-    if (!Number.isFinite(reValue) || !Number.isFinite(imValue)) {
-        throw new NumericRangeError(`"${input}" is outside the float range`);
-    }
+    if (!Number.isFinite(reValue) || !Number.isFinite(imValue))
+        return NumberOutOfRange();
     return Complex.fromParts(reValue, imValue);
 }
 /** `x` as complex-number text, dropping a leading `1` before `i`. */
@@ -312,8 +318,15 @@ export class Complex {
             return value;
         if (typeof value === 'number')
             return Complex.fromParts(value, 0);
-        if (typeof value === 'string')
-            return parseComplex(value);
+        if (typeof value === 'string') {
+            const parsed = parseComplex(value);
+            if (InvalidNumber.is(parsed)) {
+                throw new NumberFormatError(`"${value}" is not a complex number (expected forms like 3+4i, -2i, 5)`);
+            }
+            if (NumberOutOfRange.is(parsed))
+                throw new NumericRangeError(`"${value}" is outside the float range`);
+            return parsed;
+        }
         throw new TypeError('expected a Complex, a number, or a string');
     }
     /** `r·(cos θ + i·sin θ)`. `r` must be ≥ 0; both must be finite. */
@@ -651,11 +664,15 @@ export class Complex {
     }
     /**
      * All `n` complex `n`-th roots, counter-clockwise from the principal root
-     * (index 0, the one `pow(1/n)` returns). Zero has `n` roots, all zero.
+     * (index 0, the one `pow(1/n)` returns). Zero has `n` roots, all zero. `n` above 1,000,000 throws
+     * `ResourceLimitError`: the roots are built as objects, so `n` is bounded by memory.
      */
     nthRoots(n) {
         if (!Number.isSafeInteger(n) || n < 1) {
             throw new InvalidArgumentError(`n must be a positive safe integer, got ${n}`);
+        }
+        if (n > MAX_NTH_ROOTS) {
+            throw new ResourceLimitError(`nthRoots builds at most ${MAX_NTH_ROOTS} roots, got n = ${n}`);
         }
         if (this.isZero())
             return Array.from({ length: n }, () => Complex.ZERO);

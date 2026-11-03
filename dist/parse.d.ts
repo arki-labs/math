@@ -12,10 +12,12 @@
  * but 1234 in `de-DE`. Group separators are only removed, never validated, so
  * `'1,23,4'` is accepted in `en-US` and reads as 1234.
  *
+ * Parsers return, they do not throw: text that is not a number returns the
+ * `InvalidNumber` failure, a value past the limits returns `NumberOutOfRange`.
  * Runtimes without `Intl.NumberFormat#formatToParts` (React Native's Hermes on
- * iOS) throw `UnsupportedFeatureError`; pass `symbols` to parse without `Intl`.
+ * iOS) throw `UnsupportedFeatureError`, a setup fault; pass `symbols` to parse without `Intl`.
  */
-import type { Decimal } from './decimal.js';
+import { Decimal } from './decimal.js';
 export type ParseOptions = {
     /** BCP 47 locale tag. Default `'en-US'`. Ignored when `symbols` is given. */
     locale?: string;
@@ -40,12 +42,16 @@ export type LocaleNumberSymbols = {
     digits: string[];
 };
 /** The decimal, group and minus symbols and the digits a locale uses. Cached per locale. */
-export declare function localeNumberSymbols(locale: string): LocaleNumberSymbols;
+export declare function localeNumberSymbols(requested: string): LocaleNumberSymbols;
 /**
  * Parses a locale-formatted number: `parseNumber('1.234,56', { locale: 'de-DE' })` → `1234.56`.
- * Lenient and locale-aware; for strict ASCII input use `decimal()`.
+ * Lenient and locale-aware. Returns `InvalidNumber` for text that is not a number in the locale,
+ * and `NumberOutOfRange` past the float range (use `parseDecimal` to keep every digit).
  */
-export declare function parseNumber(input: string, options?: ParseOptions): number;
-/** Like `parseNumber` (lenient, locale-aware) but exact: every digit survives in the returned `Decimal`. */
-export declare function parseDecimal(input: string, options?: ParseOptions): Decimal;
+export declare function parseNumber(input: string, options?: ParseOptions): number | import("@arki/failure").Failure<"math.invalid_number", undefined> | import("@arki/failure").Failure<"math.number_out_of_range", undefined>;
+/**
+ * Like `parseNumber` (lenient, locale-aware) but exact: every digit survives in the returned `Decimal`.
+ * Returns `InvalidNumber` for text that is not a number, `NumberOutOfRange` past 10 000 digits or a scale of ±10 000.
+ */
+export declare function parseDecimal(input: string, options?: ParseOptions): Decimal | import("@arki/failure").Failure<"math.invalid_number", undefined> | import("@arki/failure").Failure<"math.number_out_of_range", undefined>;
 //# sourceMappingURL=parse.d.ts.map

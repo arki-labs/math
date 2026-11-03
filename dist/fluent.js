@@ -83,6 +83,7 @@ export class NumberValue {
     formatNumber(options) {
         return formatNumber(this.#value, options);
     }
+    /** A malformed currency code returns `InvalidCurrency`. */
     formatCurrency(currency, options) {
         return formatCurrency(this.#value, currency, options);
     }
@@ -91,7 +92,7 @@ export class NumberValue {
         return formatPercent(this.#value, options);
     }
     formatCompact(options) {
-        return formatCompact(this.#value, options);
+        return options === undefined ? formatCompact(this.#value) : formatCompact(this.#value, options);
     }
     // Extraction ---------------------------------------------------------------
     /** Exact decimal of the shortest spelling: `num(0.1).toDecimal()` is exactly 1/10. */

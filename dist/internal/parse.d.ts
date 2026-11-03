@@ -6,9 +6,13 @@ export type DecimalParts = {
 /**
  * Strict ASCII decimal syntax: optional sign, digits, optional fraction,
  * optional exponent. No whitespace, grouping, localized separators, hex,
- * `Infinity` or `NaN` — those belong to `@arki/math/parse`.
+ * `Infinity` or `NaN` — those belong to `@arki/math/parse`. Returns
+ * `InvalidNumber` for other text and `NumberOutOfRange` past the digit or
+ * scale limit; builders go through {@link decimalParts}, which throws.
  */
-export declare function parseDecimalString(input: string): DecimalParts;
+export declare function parseDecimalString(input: string): DecimalParts | import("@arki/failure").Failure<"math.invalid_number", undefined> | import("@arki/failure").Failure<"math.number_out_of_range", undefined>;
+/** The builders' strict parse: {@link parseDecimalString}, with its failures thrown as the errors builders document. */
+export declare function decimalParts(input: string): DecimalParts;
 /**
  * A JS number is read through its shortest decimal spelling, so
  * `0.1` means exactly 1/10 — what the developer wrote, not the binary

@@ -12,12 +12,16 @@
  * but 1234 in `de-DE`. Group separators are only removed, never validated, so
  * `'1,23,4'` is accepted in `en-US` and reads as 1234.
  *
+ * Parsers return, they do not throw: text that is not a number returns the
+ * `InvalidNumber` failure, a value past the limits returns `NumberOutOfRange`.
  * Runtimes without `Intl.NumberFormat#formatToParts` (React Native's Hermes on
- * iOS) throw `UnsupportedFeatureError`; pass `symbols` to parse without `Intl`.
+ * iOS) throw `UnsupportedFeatureError`, a setup fault; pass `symbols` to parse without `Intl`.
  */
-import { decimal } from './decimal.js';
-import { NumberFormatError, NumericRangeError, UnsupportedFeatureError } from './errors.js';
-const DEFAULT_LOCALE = 'en-US';
+import { isFailure } from '@arki/failure';
+import { Decimal } from './decimal.js';
+import { InvalidNumber, NumberOutOfRange, UnsupportedFeatureError } from './errors.js';
+import { DEFAULT_LOCALE, resolveLocale } from './internal/locale.js';
+import { parseDecimalString } from './internal/parse.js';
 // LRM, RLM and Arabic letter mark: invisible direction marks some locales put around signs.
 const BIDI_MARKS = /[\u200E\u200F؜]/g;
 const symbolCache = new Map();
@@ -45,7 +49,8 @@ function prepare(locale) {
     return prepared;
 }
 /** The decimal, group and minus symbols and the digits a locale uses. Cached per locale. */
-export function localeNumberSymbols(locale) {
+export function localeNumberSymbols(requested) {
+    const locale = resolveLocale(requested);
     let symbols = symbolCache.get(locale);
     if (!symbols) {
         const formatter = new Intl.NumberFormat(locale);
@@ -67,10 +72,20 @@ export function localeNumberSymbols(locale) {
     return { ...symbols, digits: [...symbols.digits] };
 }
 const STRICT_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
-const OUTER_SPACE = /^[ \t\n\r\f\v\u00A0\u202F]+|[ \t\n\r\f\v\u00A0\u202F]+$/g;
+const OUTER_SPACE = new Set([' ', '\t', '\n', '\r', '\f', '\v', '\u00A0', '\u202F']);
 const GROUP_SPACES = /[ \u00A0\u202F\u2009]/g;
+/** The text without leading and trailing {@link OUTER_SPACE}. A scan from both ends: a regex with a `$` alternative is quadratic on a long run of spaces. */
+function trimOuterSpace(input) {
+    let start = 0;
+    let end = input.length;
+    while (start < end && OUTER_SPACE.has(input[start]))
+        start++;
+    while (end > start && OUTER_SPACE.has(input[end - 1]))
+        end--;
+    return input.slice(start, end);
+}
 function normalize(input, prepared) {
-    let text = input.replaceAll(OUTER_SPACE, '').replaceAll(BIDI_MARKS, '');
+    let text = trimOuterSpace(input).replaceAll(BIDI_MARKS, '');
     let mapped = '';
     for (const char of text)
         mapped += prepared.digitMap.get(char) ?? char;
@@ -81,33 +96,35 @@ function normalize(input, prepared) {
         .join('-')
         .replaceAll(/[\u2212\u2013]/g, '-');
 }
-function normalizeOrThrow(input, options) {
+/** The text in strict ASCII syntax, or `InvalidNumber` when it does not read as a number in the locale or symbols. */
+function normalizeText(input, options) {
     if (typeof input !== 'string')
         throw new TypeError('input must be a string; convert other types first');
     const symbols = options.symbols;
-    const locale = options.locale ?? DEFAULT_LOCALE;
-    const normalized = normalize(input, symbols === undefined ? prepare(locale) : prepareSymbols(symbols));
-    if (!STRICT_DECIMAL.test(normalized)) {
-        const source = symbols === undefined
-            ? `in locale '${locale}'; check the locale matches the text (the decimal mark differs between locales)`
-            : `with decimal mark '${symbols.decimal}' and group separator '${symbols.group}'`;
-        throw new NumberFormatError(`Cannot parse '${input}' as a number ${source}, or pass an ASCII string to decimal()`);
-    }
-    return normalized;
+    const normalized = normalize(input, symbols === undefined ? prepare(options.locale ?? DEFAULT_LOCALE) : prepareSymbols(symbols));
+    return STRICT_DECIMAL.test(normalized) ? normalized : InvalidNumber();
 }
 /**
  * Parses a locale-formatted number: `parseNumber('1.234,56', { locale: 'de-DE' })` → `1234.56`.
- * Lenient and locale-aware; for strict ASCII input use `decimal()`.
+ * Lenient and locale-aware. Returns `InvalidNumber` for text that is not a number in the locale,
+ * and `NumberOutOfRange` past the float range (use `parseDecimal` to keep every digit).
  */
 export function parseNumber(input, options = {}) {
-    const result = Number(normalizeOrThrow(input, options));
-    if (!Number.isFinite(result)) {
-        throw new NumericRangeError(`'${input}' is too large for a JS number; use parseDecimal to keep every digit`);
-    }
-    return result;
+    const normalized = normalizeText(input, options);
+    if (isFailure(normalized))
+        return normalized;
+    const result = Number(normalized);
+    return Number.isFinite(result) ? result : NumberOutOfRange();
 }
-/** Like `parseNumber` (lenient, locale-aware) but exact: every digit survives in the returned `Decimal`. */
+/**
+ * Like `parseNumber` (lenient, locale-aware) but exact: every digit survives in the returned `Decimal`.
+ * Returns `InvalidNumber` for text that is not a number, `NumberOutOfRange` past 10 000 digits or a scale of ±10 000.
+ */
 export function parseDecimal(input, options = {}) {
-    return decimal(normalizeOrThrow(input, options));
+    const normalized = normalizeText(input, options);
+    if (isFailure(normalized))
+        return normalized;
+    const parts = parseDecimalString(normalized);
+    return isFailure(parts) ? parts : Decimal.fromParts(parts);
 }
 //# sourceMappingURL=parse.js.map

@@ -1,6 +1,6 @@
 /**
- * Numerical derivatives and limits of a function of one real variable,
- * `f: (x: number) => number`, by Richardson extrapolation on float64.
+ * Numerical derivatives and limits of a one-variable function. The function is
+ * `f: (x: number) => number`, and the method is Richardson extrapolation on float64.
  *
  * Both functions return **numerical estimates with an error estimate**, never
  * proofs. They sample `f` at a shrinking sequence of steps and extrapolate the
@@ -35,20 +35,20 @@
  *
  * **Tolerance and failures.** An estimate is accepted when `errorEstimate ≤
  * max(absoluteTolerance, relativeTolerance · |value|)`, defaults `1e-10` and
- * `1e-8`. Otherwise `ExtrapolationConvergenceError` (a `ConvergenceError`)
- * is thrown with the best estimate in `best`; so are one-sided limits that
- * disagree. `f` returning `NaN` or `±Infinity` at a sample point throws
+ * `1e-8`. Otherwise the call returns `NotConverged`
+ * (`math.not_converged`) whose `cause` is an `ExtrapolationConvergenceError`
+ * with the best estimate in `best`; so do one-sided limits that disagree. `f` returning `NaN` or `±Infinity` at a sample point throws
  * `NumericRangeError` naming the point; bad arguments throw
  * `InvalidArgumentError`. Results are `{ value, errorEstimate, evaluations }`.
  */
-import { ConvergenceError, InvalidArgumentError } from './errors.js';
+import { ConvergenceError, InvalidArgumentError, orNotConverged } from './errors.js';
 import { assertFunction, call, noNegativeZero, readStep, readTolerance } from './internal/calculus.js';
 /** `derivative` or `limit` missed its tolerance; `best` is the best estimate it reached. */
 export class ExtrapolationConvergenceError extends ConvergenceError {
     /** The best value, its error estimate and the evaluations spent. */
     best;
     constructor(message, best) {
-        super(message);
+        super(message, best.evaluations);
         this.best = best;
     }
 }
@@ -113,6 +113,9 @@ function defaultStep(x) {
  * derivative(Math.exp, 1).value; // 2.718281828459045 (to about 1e-12)
  */
 export function derivative(f, x, options) {
+    return orNotConverged(() => derivativeOrThrow(f, x, options));
+}
+function derivativeOrThrow(f, x, options) {
     assertFunction(f, 'f');
     if (typeof x !== 'number')
         throw new TypeError('x must be a number');
@@ -148,6 +151,9 @@ export function derivative(f, x, options) {
  * limit(x => (1 + 1 / x) ** x, Infinity).value; // 2.718281828… (to about 1e-9)
  */
 export function limit(f, x0, options) {
+    return orNotConverged(() => limitOrThrow(f, x0, options));
+}
+function limitOrThrow(f, x0, options) {
     assertFunction(f, 'f');
     if (typeof x0 !== 'number')
         throw new TypeError('x0 must be a number');

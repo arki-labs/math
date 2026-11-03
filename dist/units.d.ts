@@ -1,5 +1,5 @@
 /**
- * Unit conversion across twenty-two categories: length, mass, area, volume,
+ * Unit conversion across twenty-two categories. The categories are length, mass, area, volume,
  * temperature, time, speed, data, energy, pressure, angle, solid angle, power,
  * frequency, force, torque, fuel economy, data rate, electric current,
  * illuminance, radioactivity, dynamic viscosity and kinematic viscosity.
@@ -83,6 +83,7 @@ export declare function unitsOf(category: UnitCategory): readonly Unit[];
  * `convert(1, 'in', 'cm')` is exactly `2.54`; `convert(100, 'C', 'F')` is `212`.
  * Throws `InvalidArgumentError` for unknown units or units of different categories,
  * and for `0` to or from `l/100km` (zero fuel use or zero distance per litre is infinite).
+ * Throws `NumericRangeError` when the result overflows the float range (`1e308 km` in `mm`).
  */
 export declare function convert(value: number, from: Unit, to: Unit): number;
 /**

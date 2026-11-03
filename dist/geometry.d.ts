@@ -20,7 +20,8 @@
  *
  * Lengths are unitless: results are in the unit of the inputs (squared for
  * areas, cubed for volumes). Every input must be finite and every length
- * positive; bad input throws `InvalidArgumentError`. Results never carry `-0`.
+ * positive; bad input throws `InvalidArgumentError`, and a result that overflows the float range (the area of a
+ * circle of radius `1e200`) throws `NumericRangeError`. Results never carry `-0`.
  */
 import type { AngleUnit } from './units.js';
 export type AngleOptions = {

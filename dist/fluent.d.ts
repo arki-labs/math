@@ -4,6 +4,7 @@
  * approximate. Hop to the exact types with `.toDecimal()` / `.toRatio()`
  * when a result must be exact. Extract with `.value()`.
  */
+import type { InvalidCurrencyFailure } from './errors.js';
 import type { CompactOptions, CurrencyOptions, FormatOptions } from './format.js';
 import type { Bounds } from './number.js';
 import type { RoundingMode } from './rounding.js';
@@ -29,10 +30,15 @@ export declare class NumberValue {
     isNegative(): boolean;
     isInteger(): boolean;
     formatNumber(options?: FormatOptions): string;
-    formatCurrency(currency: string, options?: CurrencyOptions): string;
+    /** A malformed currency code returns `InvalidCurrency`. */
+    formatCurrency(currency: string, options?: CurrencyOptions): string | InvalidCurrencyFailure;
     /** The wrapped value is a fraction: `num(0.125).formatPercent()` → `'12.5%'`. */
     formatPercent(options?: FormatOptions): string;
-    formatCompact(options?: CompactOptions): string;
+    formatCompact(options?: CompactOptions & {
+        currency?: undefined;
+    }): string;
+    /** With `currency` the result is compact money, and a malformed code returns `InvalidCurrency`. */
+    formatCompact(options: CompactOptions): string | InvalidCurrencyFailure;
     /** Exact decimal of the shortest spelling: `num(0.1).toDecimal()` is exactly 1/10. */
     toDecimal(): Decimal;
     toRatio(): Rational;

@@ -5,10 +5,10 @@
  * `../decimal.ts` and `../rational.ts`.
  */
 import { DivisionByZeroError, InvalidArgumentError, NumberFormatError, NumericRangeError, ResourceLimitError, RoundingNecessaryError, } from '../errors.js';
-import { abs, digitCount, divideRounded, floorDiv, gcd, pow10, sign } from './bigint.js';
+import { abs, digitCount, divideRounded, floorDiv, gcd, multiplyChecked, pow10, sign, timesPow10 } from './bigint.js';
 import { assertScale, fractionToDecimalParts } from './fraction.js';
-import { assertDigitLimit, MAX_DIGITS, MAX_SCALE } from './limits.js';
-import { parseDecimalString, partsFromBigInt, partsFromNumber } from './parse.js';
+import { assertDigitLimit, assertIntermediateDigits, MAX_DIGITS, MAX_SCALE } from './limits.js';
+import { decimalParts, partsFromBigInt, partsFromNumber } from './parse.js';
 const BRAND = Symbol('arki.math.exact');
 /** Coefficients in this range print through `Number` in `toString`. */
 const MAX_SAFE_COEFFICIENT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -63,7 +63,7 @@ function toDecimalParts(value) {
         return { coefficient: value.coefficient, scale: value.scale };
     switch (typeof value) {
         case 'string': {
-            return parseDecimalString(value);
+            return decimalParts(value);
         }
         case 'number': {
             return partsFromNumber(value);
@@ -137,10 +137,10 @@ export class Decimal {
         for (const value of values) {
             const d = Decimal.from(value);
             if (d.scale > scale) {
-                coefficient *= pow10(d.scale - scale);
+                coefficient = timesPow10(coefficient, d.scale - scale, 'The sum');
                 scale = d.scale;
             }
-            coefficient += d.scale === scale ? d.coefficient : d.coefficient * pow10(scale - d.scale);
+            coefficient += d.scale === scale ? d.coefficient : timesPow10(d.coefficient, scale - d.scale, 'The sum');
         }
         return new Decimal(assertResultDigits(coefficient, 'The sum'), scale, BRAND);
     }
@@ -177,7 +177,7 @@ export class Decimal {
         if (scale > MAX_SCALE) {
             throw new ResourceLimitError(`The product would have ${scale} fraction digits; the limit is ${MAX_SCALE}`);
         }
-        return new Decimal(assertResultDigits(this.coefficient * that.coefficient, 'The product'), scale, BRAND);
+        return new Decimal(assertResultDigits(multiplyChecked(this.coefficient, that.coefficient, 'The product'), 'The product'), scale, BRAND);
     }
     /**
      * Exact when the result terminates (`1 ÷ 8 = 0.125`). When it does not
@@ -186,7 +186,7 @@ export class Decimal {
      */
     dividedBy(other, options) {
         const that = Decimal.from(other);
-        const parts = fractionToDecimalParts(this.coefficient * pow10(that.scale), that.coefficient * pow10(this.scale), options);
+        const parts = fractionToDecimalParts(timesPow10(this.coefficient, that.scale, 'The quotient'), timesPow10(that.coefficient, this.scale, 'The quotient'), options);
         assertResultDigits(parts.coefficient, 'The quotient');
         return Decimal.fromParts(parts);
     }
@@ -232,8 +232,9 @@ export class Decimal {
         const diff = scale - this.scale;
         if (diff === 0)
             return this;
-        if (diff > 0)
-            return new Decimal(assertResultDigits(this.coefficient * pow10(diff), 'The value'), scale, BRAND);
+        if (diff > 0) {
+            return new Decimal(assertResultDigits(timesPow10(this.coefficient, diff, 'The value'), 'The value'), scale, BRAND);
+        }
         return new Decimal(divideRounded(this.coefficient, pow10(-diff), rounding), scale, BRAND);
     }
     /** `toScale` with the display-friendly default: half-up. `round(2)` on `1.005` gives `1.01`. */
@@ -255,7 +256,7 @@ export class Decimal {
         // Rounding away the integer digits leaves trailing zeros: keep them as integer zeros, not a negative scale.
         return this.scale >= drop
             ? new Decimal(rounded, this.scale - drop, BRAND)
-            : new Decimal(assertResultDigits(rounded * pow10(drop - this.scale), 'The rounded value'), 0, BRAND);
+            : new Decimal(assertResultDigits(timesPow10(rounded, drop - this.scale, 'The rounded value'), 'The rounded value'), 0, BRAND);
     }
     /** Rounds to the nearest multiple of `step`: `decimal('1.23').roundTo('0.05')` → `1.25`. Default half-up. */
     roundTo(step, rounding = 'halfUp') {
@@ -380,8 +381,8 @@ function align(a, b) {
     if (a.scale === b.scale)
         return [a.coefficient, b.coefficient, a.scale];
     if (a.scale > b.scale)
-        return [a.coefficient, b.coefficient * pow10(a.scale - b.scale), a.scale];
-    return [a.coefficient * pow10(b.scale - a.scale), b.coefficient, b.scale];
+        return [a.coefficient, timesPow10(b.coefficient, a.scale - b.scale, 'The value'), a.scale];
+    return [timesPow10(a.coefficient, b.scale - a.scale, 'The value'), b.coefficient, b.scale];
 }
 // Frozen: `pow(0)` returns it, and `pow(-n)` divides by it.
 const ONE = Object.freeze(Decimal.fromParts({ coefficient: 1n, scale: 0 }));
@@ -444,13 +445,15 @@ export class Rational {
         const g = gcd(this.denominator, that.denominator);
         if (g === 1n) {
             // Coprime denominators: the sum is already in lowest terms.
-            return new Rational(assertResultDigits(this.numerator * that.denominator + that.numerator * this.denominator, 'The numerator'), assertResultDigits(this.denominator * that.denominator, 'The denominator'), BRAND);
+            return new Rational(assertResultDigits(multiplyChecked(this.numerator, that.denominator, 'The numerator') +
+                multiplyChecked(that.numerator, this.denominator, 'The numerator'), 'The numerator'), assertResultDigits(multiplyChecked(this.denominator, that.denominator, 'The denominator'), 'The denominator'), BRAND);
         }
-        const numerator = this.numerator * (that.denominator / g) + that.numerator * (this.denominator / g);
+        const numerator = multiplyChecked(this.numerator, that.denominator / g, 'The numerator') +
+            multiplyChecked(that.numerator, this.denominator / g, 'The numerator');
         if (numerator === 0n)
             return RATIONAL_ZERO;
         const g2 = gcd(numerator, g);
-        return new Rational(assertResultDigits(numerator / g2, 'The numerator'), assertResultDigits((this.denominator / g) * (that.denominator / g2), 'The denominator'), BRAND);
+        return new Rational(assertResultDigits(numerator / g2, 'The numerator'), assertResultDigits(multiplyChecked(this.denominator / g, that.denominator / g2, 'The denominator'), 'The denominator'), BRAND);
     }
     minus(other) {
         return this.plus(Rational.from(other).negated());
@@ -462,7 +465,7 @@ export class Rational {
             return RATIONAL_ZERO;
         const g1 = gcd(this.numerator, that.denominator);
         const g2 = gcd(that.numerator, this.denominator);
-        return new Rational(assertResultDigits((this.numerator / g1) * (that.numerator / g2), 'The numerator'), assertResultDigits((this.denominator / g2) * (that.denominator / g1), 'The denominator'), BRAND);
+        return new Rational(assertResultDigits(multiplyChecked(this.numerator / g1, that.numerator / g2, 'The numerator'), 'The numerator'), assertResultDigits(multiplyChecked(this.denominator / g2, that.denominator / g1, 'The denominator'), 'The denominator'), BRAND);
     }
     /** Cross-cancels like `times`, so the result is reduced before its size is checked. */
     dividedBy(other) {
@@ -473,8 +476,8 @@ export class Rational {
             return RATIONAL_ZERO;
         const g1 = gcd(this.numerator, that.numerator);
         const g2 = gcd(this.denominator, that.denominator);
-        const numerator = (this.numerator / g1) * (that.denominator / g2);
-        const denominator = (this.denominator / g2) * (that.numerator / g1);
+        const numerator = multiplyChecked(this.numerator / g1, that.denominator / g2, 'The numerator');
+        const denominator = multiplyChecked(this.denominator / g2, that.numerator / g1, 'The denominator');
         const flip = denominator < 0n ? -1n : 1n;
         return new Rational(assertResultDigits(flip * numerator, 'The numerator'), assertResultDigits(flip * denominator, 'The denominator'), BRAND);
     }
@@ -529,8 +532,8 @@ export class Rational {
     // Comparison -------------------------------------------------------------
     compareTo(other) {
         const that = Rational.from(other);
-        const left = this.numerator * that.denominator;
-        const right = that.numerator * this.denominator;
+        const left = multiplyChecked(this.numerator, that.denominator, 'The comparison');
+        const right = multiplyChecked(that.numerator, this.denominator, 'The comparison');
         return left < right ? -1 : left > right ? 1 : 0;
     }
     eq(other) {
@@ -654,7 +657,8 @@ function parseRational(input) {
     if (mixed) {
         const [, signText, whole, numeratorText, denominatorText] = mixed;
         const denominator = toBigIntInput(denominatorText, 'denominator');
-        const numerator = toBigIntInput(whole, 'whole part') * denominator + toBigIntInput(numeratorText, 'numerator');
+        const numerator = multiplyChecked(toBigIntInput(whole, 'whole part'), denominator, 'The mixed number') +
+            toBigIntInput(numeratorText, 'numerator');
         return Rational.fromParts(signText === '-' ? -numerator : numerator, denominator);
     }
     const ratioMatch = RATIO_SYNTAX.exec(input);
@@ -664,13 +668,16 @@ function parseRational(input) {
     const repeating = REPEATING_SYNTAX.exec(input);
     if (repeating) {
         const [, signText, integerDigits, fractionDigits, repeatDigits] = repeating;
+        // The numerator is fixed × period and the denominator is period × 10^fraction: size both before building either.
+        const fixedLength = Math.max(integerDigits?.length ?? 0, 1) + (fractionDigits?.length ?? 0);
+        assertIntermediateDigits(Math.max(fixedLength, fractionDigits?.length ?? 0) + repeatDigits.length + 1, 'The repeating decimal');
         const fixed = BigInt((integerDigits || '0') + (fractionDigits ?? ''));
         const period = pow10(repeatDigits.length) - 1n;
         const numerator = fixed * period + BigInt(repeatDigits);
         const denominator = period * pow10(fractionDigits.length);
         return Rational.fromParts(signText === '-' ? -numerator : numerator, denominator);
     }
-    const parts = parseDecimalString(input);
+    const parts = decimalParts(input);
     return Rational.fromParts(parts.coefficient, pow10(parts.scale));
 }
 export function ratio(first, second) {

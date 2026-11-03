@@ -1,5 +1,5 @@
 /**
- * Unit conversion across twenty-two categories: length, mass, area, volume,
+ * Unit conversion across twenty-two categories. The categories are length, mass, area, volume,
  * temperature, time, speed, data, energy, pressure, angle, solid angle, power,
  * frequency, force, torque, fuel economy, data rate, electric current,
  * illuminance, radioactivity, dynamic viscosity and kinematic viscosity.
@@ -36,8 +36,9 @@
  *
  * Every numeric input must be finite; `NaN` and `±Infinity` throw.
  */
-import { InvalidArgumentError, RoundingNecessaryError } from './errors.js';
+import { InvalidArgumentError, NumericRangeError, RoundingNecessaryError } from './errors.js';
 import { ratio } from './internal/exact.js';
+import { resolveLocale } from './internal/locale.js';
 import { assertFinite } from './number.js';
 import { Rational } from './rational.js';
 const UNITS_BY_CATEGORY = {
@@ -571,18 +572,22 @@ function pairFactor(category, from, to) {
  * `convert(1, 'in', 'cm')` is exactly `2.54`; `convert(100, 'C', 'F')` is `212`.
  * Throws `InvalidArgumentError` for unknown units or units of different categories,
  * and for `0` to or from `l/100km` (zero fuel use or zero distance per litre is infinite).
+ * Throws `NumericRangeError` when the result overflows the float range (`1e308 km` in `mm`).
  */
 export function convert(value, from, to) {
     assertFinite(value, 'value');
     const category = sharedCategory(from, to);
     if (from === to)
         return value;
-    if (category === 'temperature') {
-        return fromCelsius(toCelsius(value, from), to);
+    const converted = category === 'temperature'
+        ? fromCelsius(toCelsius(value, from), to)
+        : category === 'fuelEconomy'
+            ? convertFuelEconomy(value, from, to)
+            : value * pairFactor(category, from, to);
+    if (!Number.isFinite(converted)) {
+        throw new NumericRangeError(`converting ${value} ${from} to ${to} overflows the float range`);
     }
-    if (category === 'fuelEconomy')
-        return convertFuelEconomy(value, from, to);
-    return value * pairFactor(category, from, to);
+    return converted;
 }
 /**
  * Converts exactly, returning a `Rational`. Linear categories multiply by an
@@ -784,7 +789,8 @@ const SYMBOLS = {
 const MAX_FORMATTERS = 256;
 const formatters = new Map();
 /** Bounded cache: past 256 entries the oldest insertion is evicted. */
-function getFormatter(locale, intlUnit, display, maximumFractionDigits) {
+function getFormatter(requested, intlUnit, display, maximumFractionDigits) {
+    const locale = requested === undefined ? undefined : resolveLocale(requested);
     const key = `${locale ?? ''}|${intlUnit ?? ''}|${display}|${maximumFractionDigits ?? ''}`;
     const cached = formatters.get(key);
     if (cached)

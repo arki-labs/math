@@ -49,6 +49,12 @@ export type Polar = {
     theta: number;
 };
 /**
+ * Reads complex-number text such as `'3+4i'`, `'-2i'` or `'5'`, for outside
+ * text. Returns `InvalidNumber` for other text and `NumberOutOfRange` when a
+ * part is outside the float range. `complex('3+4i')` is the builder and throws.
+ */
+export declare function parseComplex(input: string): Complex | import("@arki/failure").Failure<"math.invalid_number", undefined> | import("@arki/failure").Failure<"math.number_out_of_range", undefined>;
+/**
  * A complex number `re + im·i` with finite float parts. Create one with
  * `complex(3, 4)`, `complex('3+4i')` or `Complex.fromPolar(r, theta)`.
  * Equality (`eq`) is exact; use `approxEqual` after float arithmetic.
@@ -160,7 +166,8 @@ export declare class Complex {
     atanh(): Complex;
     /**
      * All `n` complex `n`-th roots, counter-clockwise from the principal root
-     * (index 0, the one `pow(1/n)` returns). Zero has `n` roots, all zero.
+     * (index 0, the one `pow(1/n)` returns). Zero has `n` roots, all zero. `n` above 1,000,000 throws
+     * `ResourceLimitError`: the roots are built as objects, so `n` is bounded by memory.
      */
     nthRoots(n: number): Complex[];
     isReal(): boolean;

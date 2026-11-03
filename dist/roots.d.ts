@@ -50,13 +50,16 @@
  *   naming the point;
  * - no convergence within `maxIterations`, or a Newton step that cannot make
  *   progress (zero derivative, overflow, a local minimum of `|f|` that is not a
- *   root), throws `RootConvergenceError`, a `ConvergenceError` whose `best`
- *   field holds the last iterate and its error estimate.
+ *   root), returns `NotConverged` (`math.not_converged`): valid input that
+ *   does not settle is a result, not a bug. Its `cause` is a
+ *   `RootConvergenceError` whose `best` field holds the last iterate, its error
+ *   estimate and the iterations spent.
  *
  * A sign change across a pole looks exactly like a root to every bracketed
  * method: `findRoot(x => Math.tan(x), [1, 2])` converges to `π/2`, where `tan`
  * is unbounded. Check `|f(root)|` when `f` may be discontinuous.
  */
+import type { NotConvergedFailure } from './errors.js';
 import type { RealFunction } from './internal/calculus.js';
 import { ConvergenceError } from './errors.js';
 export type { RealFunction } from './internal/calculus.js';
@@ -98,14 +101,14 @@ export declare class RootConvergenceError extends ConvergenceError {
  * @example
  * findRoot(x => x ** 3 - 2 * x - 5, [2, 3]).root; // 2.0945514815423265 (Wallis's cubic)
  */
-export declare function findRoot(f: RealFunction, bracket: readonly [number, number], options?: RootOptions): RootResult;
+export declare function findRoot(f: RealFunction, bracket: readonly [number, number], options?: RootOptions): RootResult | NotConvergedFailure;
 /**
  * The root of a continuous `f` inside `bracket`, by bisection. Each step halves
  * the bracket, so reaching a tolerance `t` from width `w` takes
  * `ceil(log2(w / t))` steps; `errorEstimate` bounds the distance to a sign
  * change.
  */
-export declare function bisect(f: RealFunction, bracket: readonly [number, number], options?: RootOptions): RootResult;
+export declare function bisect(f: RealFunction, bracket: readonly [number, number], options?: RootOptions): RootResult | NotConvergedFailure;
 /**
  * A root of `f` near `x0` by Newton's method, given the derivative `df`.
  * Unbracketed steps are damped (halved until `|f|` decreases); with
@@ -115,17 +118,20 @@ export declare function bisect(f: RealFunction, bracket: readonly [number, numbe
  * @example
  * newton(x => x * x - 2, x => 2 * x, 1).root; // 1.4142135623730951
  */
-export declare function newton(f: RealFunction, df: RealFunction, x0: number, options?: NewtonOptions): RootResult;
+export declare function newton(f: RealFunction, df: RealFunction, x0: number, options?: NewtonOptions): RootResult | NotConvergedFailure;
 /**
  * Every root that a sign-change scan of `interval` can see, ascending. `f` is
  * evaluated on `samples + 1` evenly spaced points (default `samples` 100);
  * grid points where `f` is exactly 0 are reported as they are, and each
- * sub-interval whose ends differ in sign is refined by Brent's method. The
+ * sub-interval whose ends differ in sign is refined by Brent's method. A grid
+ * point where `f` has no finite value (it returns `NaN` or `±Infinity`, or
+ * throws a `MathError`, as `sqrt(x)` does for `x < 0`) is a gap: no sub-interval
+ * that touches it is refined, and the scan goes on. The
  * `iterations`/`evaluations` of each result count only its refinement; the scan
  * itself costs `samples + 1` evaluations.
  *
  * It can miss roots: a root of even multiplicity never changes sign, and two
  * roots inside one sub-interval cancel each other's sign change.
  */
-export declare function findRoots(f: RealFunction, interval: readonly [number, number], options?: FindRootsOptions): RootResult[];
+export declare function findRoots(f: RealFunction, interval: readonly [number, number], options?: FindRootsOptions): RootResult[] | NotConvergedFailure;
 //# sourceMappingURL=roots.d.ts.map

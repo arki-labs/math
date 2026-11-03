@@ -5,6 +5,7 @@
  * Every input must be finite; `NaN` and `±Infinity` throw rather than spread.
  * Results never carry `-0`.
  */
+import type { MathParseFailure } from './errors.js';
 import type { Decimal } from './internal/exact.js';
 import type { RoundingMode } from './rounding.js';
 /** Interval notation: `[` / `]` include the bound, `(` / `)` exclude it. */
@@ -67,9 +68,11 @@ export declare function roundToSignificant(x: number, digits: number, mode?: Rou
  * `'1200'` → 2, `'1200.'` → 4, `'0.00120'` → 3, `'1.20e3'` → 3. The exponent
  * is ignored. Zero counts its written zeros after the point (`'0'` → 1, `'0.00'` → 2).
  * Pass the text (or a `Decimal`, whose scale is its written precision):
- * a JS number cannot tell `1.20` from `1.2`. Anything else throws `NumberFormatError`.
+ * a JS number cannot tell `1.20` from `1.2`. Text is outside input, so text that is not a plain
+ * decimal returns `InvalidNumber`, and text with more than 10 000 digits returns `NumberOutOfRange`.
  */
-export declare function significantDigits(value: string | Decimal): number;
+export declare function significantDigits(value: Decimal): number;
+export declare function significantDigits(value: string): number | MathParseFailure;
 /**
  * Tolerant equality for floats. `tolerance` is relative to the larger
  * magnitude (and absolute near zero), so it works for both `0.1 + 0.2 ≈ 0.3`

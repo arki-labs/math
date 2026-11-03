@@ -8,14 +8,16 @@
  * cached because constructing one is slow.
  */
 import { decimal, isDecimal } from './decimal.js';
-import { InvalidArgumentError, NumberFormatError, NumericRangeError, UnsupportedFeatureError } from './errors.js';
+import { InvalidArgumentError, InvalidCurrency, NumberFormatError, NumericRangeError, UnsupportedFeatureError, } from './errors.js';
+import { DEFAULT_LOCALE, resolveLocale } from './internal/locale.js';
 import { assertFinite } from './number.js';
-const DEFAULT_LOCALE = 'en-US';
 /**
  * Pass as `locale` to use the runtime's default locale instead of `'en-US'`.
  * It is a word, not `undefined`, so a missing locale can never switch it on by accident.
  */
 export const RUNTIME_LOCALE = 'default';
+/** A well-formed currency code is three ASCII letters; `Intl` throws `RangeError` for anything else. */
+const isCurrencyCode = (currency) => /^[a-z]{3}$/i.test(currency);
 /** `Intl` picks the runtime locale when none is given. */
 const intlLocale = (locale) => (locale === RUNTIME_LOCALE ? undefined : locale);
 const INTL_ROUNDING = {
@@ -33,7 +35,8 @@ const formatterCache = new Map();
 function cacheKey(locale, o) {
     return `${locale}|${o.style ?? ''}|${o.currency ?? ''}|${o.currencyDisplay ?? ''}|${o.currencySign ?? ''}|${o.notation ?? ''}|${o.compactDisplay ?? ''}|${o.minimumFractionDigits ?? ''}|${o.maximumFractionDigits ?? ''}|${String(o.useGrouping ?? '')}|${o.signDisplay ?? ''}|${o.roundingMode ?? ''}`;
 }
-function getNumberFormat(locale, options) {
+function getNumberFormat(requested, options) {
+    const locale = requested === RUNTIME_LOCALE ? requested : resolveLocale(requested);
     const key = cacheKey(locale, options);
     const cached = formatterCache.get(key);
     if (cached)
@@ -197,8 +200,11 @@ export function formatNumber(value, options = {}) {
 /**
  * Formats money. Fraction digits come from the currency (2 for USD, 0 for JPY)
  * unless overridden: `formatCurrency(1234.5, 'EUR', { locale: 'de-DE' })` → `'1.234,50 €'`.
+ * A currency code that is not three ASCII letters returns `InvalidCurrency` (`math.invalid_currency`).
  */
 export function formatCurrency(value, currency, options = {}) {
+    if (!isCurrencyCode(currency))
+        return InvalidCurrency();
     return run(value, options, currencyOptions(currency, options));
 }
 /**
@@ -209,11 +215,9 @@ export function formatCurrency(value, currency, options = {}) {
 export function formatPercent(fraction, options = {}) {
     return run(fraction, options, percentOptions(options));
 }
-/**
- * Short or long compact form: `formatCompact(1230000)` → `'1.2M'`. Default max 1 fraction digit.
- * With `currency` it is compact money: `formatCompact(1_250_000, { currency: 'USD' })` → `'$1.3M'`.
- */
 export function formatCompact(value, options = {}) {
+    if (options.currency !== undefined && !isCurrencyCode(options.currency))
+        return InvalidCurrency();
     return run(value, options, compactOptions(options));
 }
 const FILE_UNITS = {
@@ -282,14 +286,19 @@ export function createFormatter(defaults) {
         if (chosen === undefined) {
             throw new InvalidArgumentError('No currency: pass one or bind it with createFormatter({ currency })');
         }
+        if (!isCurrencyCode(chosen))
+            return InvalidCurrency();
         if (explicit === undefined && options === undefined)
             return formatWith(money(), value);
         return formatCurrency(value, chosen, withLocale(options));
     }
+    function boundCompact(value, options) {
+        return options === undefined ? formatWith(compact(), value) : formatCompact(value, withLocale(options));
+    }
     return {
         formatNumber: (value, options) => options === undefined ? formatWith(plain(), value) : formatNumber(value, withLocale(options)),
         formatPercent: (value, options) => options === undefined ? formatWith(percent(), value) : formatPercent(value, withLocale(options)),
-        formatCompact: (value, options) => options === undefined ? formatWith(compact(), value) : formatCompact(value, withLocale(options)),
+        formatCompact: boundCompact,
         formatFileSize: (bytes, options) => options === undefined ? fileSizeWith(bytes, 'si', fileSize()) : formatFileSize(bytes, withLocale(options)),
         formatCurrency: boundCurrency,
     };

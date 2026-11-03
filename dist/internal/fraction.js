@@ -1,5 +1,5 @@
 import { DivisionByZeroError, InvalidArgumentError, RoundingNecessaryError } from '../errors.js';
-import { divideRounded, gcd, pow10, stripFactor } from './bigint.js';
+import { divideRounded, gcd, stripFactor, timesPow10 } from './bigint.js';
 import { assertScaleLimit } from './limits.js';
 export function assertScale(scale) {
     if (!Number.isInteger(scale) || scale < 0) {
@@ -20,7 +20,7 @@ export function fractionToDecimalParts(numerator, denominator, options) {
         throw new DivisionByZeroError('Division by zero');
     if (options) {
         assertScale(options.scale);
-        const scaled = divideRounded(numerator * pow10(options.scale), denominator, options.rounding ?? 'unnecessary');
+        const scaled = divideRounded(timesPow10(numerator, options.scale, 'The quotient'), denominator, options.rounding ?? 'unnecessary');
         return { coefficient: scaled, scale: options.scale };
     }
     const divisor = gcd(numerator, denominator);
@@ -36,6 +36,6 @@ export function fractionToDecimalParts(numerator, denominator, options) {
         throw new RoundingNecessaryError(`${p}/${q} has no exact decimal form; pass { scale, rounding } to round it, or keep it as a ratio()`);
     }
     const scale = Math.max(twos, fives);
-    return { coefficient: (p * pow10(scale)) / q, scale };
+    return { coefficient: timesPow10(p, scale, 'The quotient') / q, scale };
 }
 //# sourceMappingURL=fraction.js.map

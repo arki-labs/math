@@ -3,9 +3,9 @@
  * overloads. Operands must share a type; the `number` forms require safe
  * integers and refuse to return an unsafe one (use `bigint` instead).
  */
-import { DivisionByZeroError, InvalidArgumentError, NumberFormatError, NumericRangeError, ResourceLimitError, } from './errors.js';
+import { DivisionByZeroError, InvalidArgumentError, InvalidNumber, NumberOutOfRange, NumericRangeError, ResourceLimitError, } from './errors.js';
 import { abs as absBigInt, digitCount, floorDiv, gcd as gcdBigInt } from './internal/bigint.js';
-import { assertDigitLimit, MAX_INTEGER_DIGITS } from './internal/limits.js';
+import { exceedsDigitLimit, MAX_INTEGER_DIGITS } from './internal/limits.js';
 function assertSafeInteger(value, name) {
     if (!Number.isSafeInteger(value)) {
         throw new InvalidArgumentError(`${name} must be a safe integer, got ${value}`);
@@ -34,7 +34,11 @@ export function lcm(a, b) {
         const bb = b;
         if (a === 0n || bb === 0n)
             return 0n;
-        const product = (a / gcdBigInt(a, bb)) * bb;
+        const reduced = a / gcdBigInt(a, bb);
+        // Cheap pre-check, like combinations: the product has at least digits(x) + digits(y) - 1 digits.
+        assertIntegerDigits(digitCount(reduced) + digitCount(bb) - 1, 'lcm');
+        const product = reduced * bb;
+        assertIntegerDigits(digitCount(product), 'lcm');
         return product < 0n ? -product : product;
     }
     const bn = b;
@@ -69,8 +73,8 @@ export function divmod(a, b) {
     const quotient = Number.isSafeInteger(rest) ? rest / bn : Number(floorDiv(BigInt(a), BigInt(bn)));
     return [quotient === 0 ? 0 : quotient, remainder === 0 ? 0 : remainder];
 }
-// Bigint results honour MAX_INTEGER_DIGITS (100,000 digits); 25,205! has 99,996 digits, 25,206! is the first to cross.
-const MAX_BIGINT_FACTORIAL = 25_205;
+// Bigint results honour MAX_INTEGER_DIGITS (18,000 digits); 5,450! has 17,999 digits, 5,451! has 18,003.
+const MAX_BIGINT_FACTORIAL = 5450;
 // Caps the loop length; the result's digit count is checked exactly afterwards.
 const MAX_BIGINT_TERMS = 100_000;
 // F(47,851) has 10,000 digits; F(47,852) is the first to cross the limit.
@@ -81,9 +85,32 @@ function assertIntegerDigits(digitTotal, what) {
         throw new ResourceLimitError(`${what} has ${digitTotal} digits; the limit is ${MAX_INTEGER_DIGITS}`);
     }
 }
-/** Cheap pre-check: a product of `terms` factors each below `n` has at most `terms · digits(n)` digits. */
-function assertProductFits(terms, n, what) {
-    if (terms * BigInt(digitCount(n)) > BigInt(MAX_INTEGER_DIGITS) * 4n) {
+/** log10 of a positive bigint, from its leading 17 digits, so it works past the range of a double. */
+function log10OfBigInt(n) {
+    const text = n.toString();
+    const lead = text.slice(0, 17);
+    return Math.log10(Number(lead)) + (text.length - lead.length);
+}
+/**
+ * log10 of lo · (lo+1) · … · hi, for 1 ≤ lo ≤ hi and at most `MAX_BIGINT_TERMS` factors. Above 10^300
+ * every factor is within 1e-295 of the others, so one logarithm stands for all of them.
+ */
+function log10OfRange(lo, hi) {
+    if (hi >= 10n ** 300n)
+        return Number(hi - lo + 1n) * log10OfBigInt(hi);
+    let total = 0;
+    for (let i = lo; i <= hi; i++)
+        total += Math.log10(Number(i));
+    return total;
+}
+/**
+ * Cheap pre-check from the logarithm: refuses a product (`log10Digits` is its log10) that surely
+ * has more than `MAX_INTEGER_DIGITS` digits, before any of it is built. Every partial product
+ * and every step of `combinations` stays within a few digits of the result, so this also bounds
+ * the intermediates. The exact digit count is checked on the result afterwards.
+ */
+function assertProductFits(log10Digits, what) {
+    if (Math.floor(log10Digits - 1e-9) + 1 > MAX_INTEGER_DIGITS) {
         throw new ResourceLimitError(`${what} would exceed ${MAX_INTEGER_DIGITS} digits`);
     }
 }
@@ -145,7 +172,9 @@ export function combinations(n, k) {
             throw new ResourceLimitError(`combinations is limited to min(k, n - k) <= ${MAX_BIGINT_TERMS}`);
         }
         const base = n - steps;
-        assertProductFits(steps, n, `combinations(${n}, ${kb})`);
+        if (steps > 0n) {
+            assertProductFits(log10OfRange(base + 1n, n) - log10OfRange(1n, steps), `combinations(${n}, ${kb})`);
+        }
         let result = 1n;
         for (let i = 1n; i <= steps; i++)
             result = (result * (base + i)) / i;
@@ -184,7 +213,8 @@ export function permutations(n, k) {
         if (kb > BigInt(MAX_BIGINT_TERMS)) {
             throw new ResourceLimitError(`permutations is limited to k <= ${MAX_BIGINT_TERMS}`);
         }
-        assertProductFits(kb, n, `permutations(${n}, ${kb})`);
+        if (kb > 0n)
+            assertProductFits(log10OfRange(n - kb + 1n, n), `permutations(${n}, ${kb})`);
         const result = rangeProduct(n - kb + 1n, n);
         assertIntegerDigits(digitCount(result), `permutations(${n}, ${kb})`);
         return result;
@@ -218,6 +248,8 @@ export function modPow(base, exponent, modulus) {
         throw new InvalidArgumentError('exponent must be non-negative');
     if (modulus === 1n)
         return 0n;
+    // Each step multiplies two residues below the modulus.
+    assertIntegerDigits(2 * digitCount(modulus), 'modPow');
     let result = 1n;
     let b = ((base % modulus) + modulus) % modulus;
     let e = exponent;
@@ -460,15 +492,18 @@ export function toBase(value, base) {
  * Reads an integer written in `base` 2 to 36 into a `bigint`: `fromBase('ff', 16)`
  * is `255n`. An optional leading `-` or `+` is allowed and digits are case
  * insensitive. Anything else (spaces, `_`, a `0x` prefix, a digit too large for
- * the base, empty text) throws `NumberFormatError`.
+ * the base, empty text) returns the `InvalidNumber` failure; more than 10 000
+ * digits returns `NumberOutOfRange`. A base outside 2 to 36 is a bug and throws
+ * `InvalidArgumentError`.
  */
 export function fromBase(text, base) {
     assertBase(base);
     const negative = text.startsWith('-');
     const start = negative || text.startsWith('+') ? 1 : 0;
     if (text.length - start === 0)
-        throw new NumberFormatError(`"${text}" has no digits`);
-    assertDigitLimit(text.length - start, 'fromBase input');
+        return InvalidNumber();
+    if (exceedsDigitLimit(text.length - start))
+        return NumberOutOfRange();
     const radix = BigInt(base);
     let result = 0n;
     for (let i = start; i < text.length; i++) {
@@ -481,9 +516,8 @@ export function fromBase(text, base) {
             digit = code - 87;
         else if (code >= 65 && code <= 90)
             digit = code - 55;
-        if (digit >= base) {
-            throw new NumberFormatError(`"${text.charAt(i)}" is not a valid base ${base} digit (in "${text}")`);
-        }
+        if (digit >= base)
+            return InvalidNumber();
         result = result * radix + BigInt(digit);
     }
     return negative ? -result : result;
