@@ -1,4 +1,4 @@
-Read-only mirror of `@arki/math` v0.2.0. Source and issues: arki-labs/arki. Docs: https://arki.dev/packages/math. Published 2026-11-03 with provenance https://www.npmjs.com/package/@arki/math/v/0.2.0#provenance.
+Read-only mirror of `@arki/math` v0.2.1. Source and issues: arki-labs/arki. Docs: https://arki.dev/packages/math. Published 2026-11-23 with provenance https://www.npmjs.com/package/@arki/math/v/0.2.1#provenance.
 
 # @arki/math
 
@@ -61,13 +61,13 @@ Float math gives `60.269999999999996` here. `Decimal` gives `60.27`.
 
 <!-- runtimes:start -->
 
-| Runtime | Result  | Version tested        | Date (UTC) |
-| ------- | ------- | --------------------- | ---------- |
-| node    | pass    | v26.11.1              | 2026-10-17 |
-| bun     | pass    | 1.4.2                 | 2026-10-17 |
-| deno    | pass    | 2.9.7                 | 2026-10-17 |
-| browser | pass    | Chromium 156.0.8078.4 | 2026-10-17 |
-| hermes  | not run | -                     | 2026-10-17 |
+| Runtime | Result | Version tested        | Date (UTC) |
+| ------- | ------ | --------------------- | ---------- |
+| node    | pass   | v22.13.1              | 2026-11-05 |
+| bun     | pass   | 1.4.2                 | 2026-11-05 |
+| deno    | pass   | 2.9.8                 | 2026-11-05 |
+| browser | pass   | Chromium 156.0.8078.4 | 2026-11-05 |
+| hermes  | pass   | V1 250829098.0.17     | 2026-11-05 |
 
 <!-- runtimes:end -->
 
@@ -161,6 +161,10 @@ control and throw. Arithmetic throws the documented errors below.
 | `ARKI_MATH_E009` | `SingularMatrixError`      | `solve`/`inverse` met a matrix singular to working precision                                                                                                                                                                                                                                                                   |
 | `ARKI_MATH_E010` | `ConvergenceError`         | the `cause` of the `NotConverged` failure (`orNotConverged` from `@arki/math/errors` turns the throw into it) that `polynomialRoots`, eigenvalues, SVD, `integrate`, `limit` and the root finders return (`.iterations`; `RootConvergenceError`, `IntegrationConvergenceError`, `ExtrapolationConvergenceError` carry `.best`) |
 | `ARKI_MATH_E011` | `NotPositiveDefiniteError` | `choleskyDecompose` met a matrix that is not positive definite                                                                                                                                                                                                                                                                 |
+
+## Observability
+
+Pure computation: no I/O, so no spans or metrics.
 
 ## Limits
 
